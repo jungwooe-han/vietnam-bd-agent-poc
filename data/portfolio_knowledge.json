@@ -1,0 +1,10 @@
+{
+  "purpose": "POC starter knowledge. Replace and expand with approved public or synthetic content.",
+  "domains": [
+    {"name": "HVAC / Facility Operations", "customer_outcomes": ["생산 안정성", "에너지 효율", "온습도 관리", "시설 운영 효율"]},
+    {"name": "SmartThings Pro / b.IoT", "customer_outcomes": ["통합관제", "에너지·설비 가시성", "운영 자동화"]},
+    {"name": "MX Rugged / Tablet / Knox", "customer_outcomes": ["현장 업무 디지털화", "작업자 연결", "보안 단말 운영"]},
+    {"name": "Signage / VXT", "customer_outcomes": ["생산·안전 정보 가시화", "현장 커뮤니케이션", "통합 콘텐츠 운영"]},
+    {"name": "HARMAN", "customer_outcomes": ["산업·모빌리티 연결", "오디오·협업 경험", "임베디드·커넥티드 솔루션"]}
+  ]
+}
