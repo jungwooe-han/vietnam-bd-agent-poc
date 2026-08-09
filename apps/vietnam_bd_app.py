@@ -6,7 +6,9 @@ import os
 import streamlit as st
 
 from src.vietnam_bd.analysis import analyze_opportunity
+from src.vietnam_bd.analysis_v2 import analyze_opportunity_v2
 from src.vietnam_bd.demo_data import demo_result
+from src.vietnam_bd.demo_data_v2 import demo_v2_result
 from src.vietnam_bd.guided_questions import generate_guided_questions
 from src.vietnam_bd.ingestion import build_extracted_context
 from src.vietnam_bd.internal_cases import load_internal_cases
@@ -19,6 +21,12 @@ from src.vietnam_bd.ui_components import (
     render_overview,
     render_qualification,
 )
+from src.vietnam_bd.ui_components_v2 import (
+    render_page_1_opportunity,
+    render_page_2_strategy,
+    render_page_3_meeting,
+    render_research_trace,
+)
 
 
 def render():
@@ -30,6 +38,12 @@ def render():
         st.session_state.bd_result = None
     if "bd_seed" not in st.session_state:
         st.session_state.bd_seed = ""
+    if "bd_engine" not in st.session_state:
+        st.session_state.bd_engine = "BD v2"
+    if "bd_result_version" not in st.session_state:
+        st.session_state.bd_result_version = "legacy"
+    if "bd_v2_research_trace" not in st.session_state:
+        st.session_state.bd_v2_research_trace = {}
 
     st.markdown(
         "<div class='hero'><h1>Vietnam Manufacturing BD Agent</h1>"
@@ -39,8 +53,11 @@ def render():
 
     with st.sidebar:
         st.markdown("### 설정")
+        engine = st.radio("분석 엔진", ["BD v2", "기존 BD"], key="bd_engine")
         demo_mode = st.checkbox("데모 모드", value=not bool(os.getenv("OPENAI_API_KEY")))
         st.caption("데모 모드는 API 호출 없이 예시 결과를 표시합니다.")
+        closed_demo = st.checkbox("Closed 데모", value=False) if engine == "BD v2" and demo_mode else False
+        developer_mode = st.checkbox("개발 모드 · Research Trace", value=False) if engine == "BD v2" else False
         if st.button("새 Opportunity"):
             for key in (
                 "bd_stage",
@@ -50,6 +67,8 @@ def render():
                 "bd_uploaded_bytes",
                 "bd_uploaded_name",
                 "bd_handoff_company",
+                "bd_result_version",
+                "bd_v2_research_trace",
             ):
                 st.session_state.pop(key, None)
             st.rerun()
@@ -92,59 +111,136 @@ def render():
             st.session_state.bd_stage = "input"
             st.rerun()
         if c2.button("분석 실행", type="primary", use_container_width=True):
-            with st.spinner("관련 맥락을 찾고 사업개발 관점으로 해석 중..."):
-                uploaded_proxy = None
-                if st.session_state.get("bd_uploaded_bytes"):
-                    class UploadedProxy:
-                        def __init__(self, name: str, data: bytes):
-                            self.name = name
-                            self._data = data
+            uploaded_proxy = None
+            if st.session_state.get("bd_uploaded_bytes"):
+                class UploadedProxy:
+                    def __init__(self, name: str, data: bytes):
+                        self.name = name
+                        self._data = data
 
-                        def getvalue(self) -> bytes:
-                            return self._data
+                    def getvalue(self) -> bytes:
+                        return self._data
 
-                    uploaded_proxy = UploadedProxy(st.session_state.bd_uploaded_name, st.session_state.bd_uploaded_bytes)
+                uploaded_proxy = UploadedProxy(st.session_state.bd_uploaded_name, st.session_state.bd_uploaded_bytes)
 
-                extracted, notes = build_extracted_context(st.session_state.bd_seed, uploaded_proxy)
-                guided = "\n\n".join(answers)
-                internal = load_internal_cases()
+            extracted, notes = build_extracted_context(st.session_state.bd_seed, uploaded_proxy)
+            guided = "\n\n".join(answers)
+            internal = load_internal_cases()
+
+            if engine == "BD v2":
+                status = st.status("BD v2 분석을 시작합니다.", expanded=True)
+
+                def progress(event: str, details: dict) -> None:
+                    if event == "seed_understanding":
+                        status.write("Seed 이해 중")
+                    elif event == "context_research":
+                        status.write("기본 Context 조사 중")
+                    elif event == "context_research_supplement":
+                        status.write(f"Context 보완 조사 {details['attempt']}/{details['maximum']} · {', '.join(details.get('missing', []))}")
+                    elif event == "context_arbitration":
+                        status.write("사업단계와 4축 Context 판단 중")
+                    elif event == "stage_gate":
+                        status.write(
+                            f"Stage Gate: {details['status']} · Research: {details['research_depth']} · Pursuit: {details['active_pursuit']}"
+                        )
+                    elif event == "research_round":
+                        mode_label = {
+                            "deep": "심층 조사",
+                            "limited": "제한 조사",
+                            "historical": "Historical 조사",
+                        }.get(details["mode"], details["mode"])
+                        status.write(
+                            f"{mode_label} Round {details['round']}/{details['total_rounds']} · {details['focus']}"
+                        )
+                    elif event == "research_round_complete":
+                        status.write(
+                            f"Round {details['round']}/{details['total_rounds']} 완료 · "
+                            f"신규 Entity {details['discovered_entities']} · 남은 Gap {details['remaining_gaps']}"
+                        )
+                    elif event == "sales_reasoning":
+                        status.write("영업 분석 생성 중")
+                    elif event == "complete":
+                        status.update(label="BD v2 상세 분석 완료", state="complete", expanded=False)
+
                 try:
                     result = (
-                        demo_result()
+                        demo_v2_result(closed=closed_demo)
                         if demo_mode
-                        else analyze_opportunity(st.session_state.bd_seed, extracted, guided, internal)
+                        else analyze_opportunity_v2(
+                            st.session_state.bd_seed,
+                            extracted=extracted,
+                            user_context=guided,
+                            progress_callback=progress,
+                            trace_callback=lambda trace: st.session_state.update(bd_v2_research_trace=trace),
+                        )
                     )
+                    if demo_mode:
+                        status.write("Mock v2 전체 결과 생성 완료")
+                        status.update(label="BD v2 데모 분석 완료", state="complete", expanded=False)
                     if notes:
                         result.source_summary.extend(notes)
                     st.session_state.bd_result = result.model_dump()
+                    st.session_state.bd_result_version = "v2"
                     st.session_state.bd_stage = "result"
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"분석에 실패했습니다: {exc}")
-                    st.info("사이드바에서 데모 모드를 켜면 UI와 결과 구조를 바로 확인할 수 있습니다.")
+                    status.update(label="BD v2 분석 실패", state="error", expanded=True)
+                    st.error(f"BD v2 분석에 실패했습니다: {exc}")
+                    st.info("기존 BD 엔진을 선택하거나 데모 모드로 v2 결과 화면을 확인할 수 있습니다.")
+            else:
+                try:
+                    with st.spinner("기존 BD 분석을 실행 중..."):
+                        result = (
+                            demo_result()
+                            if demo_mode
+                            else analyze_opportunity(st.session_state.bd_seed, extracted, guided, internal)
+                        )
+                    if notes:
+                        result.source_summary.extend(notes)
+                    st.session_state.bd_result = result.model_dump()
+                    st.session_state.bd_result_version = "legacy"
+                    st.session_state.bd_stage = "result"
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"기존 BD 분석에 실패했습니다: {exc}")
+                    st.info("사이드바에서 데모 모드를 켜면 기존 UI와 결과 구조를 확인할 수 있습니다.")
 
     else:
-        from src.vietnam_bd.models import AnalysisResult
+        if st.session_state.bd_result_version == "v2":
+            from src.vietnam_bd.models import BDV2AnalysisResult
 
-        result = AnalysisResult.model_validate(st.session_state.bd_result)
-        render_overview(result)
+            result = BDV2AnalysisResult.model_validate(st.session_state.bd_result)
+            page1, page2, page3 = st.tabs(["1. Opportunity", "2. Strategy", "3. Meeting"])
+            with page1:
+                render_page_1_opportunity(result)
+            with page2:
+                render_page_2_strategy(result)
+            with page3:
+                render_page_3_meeting(result)
+            if developer_mode and st.session_state.get("bd_v2_research_trace"):
+                render_research_trace(st.session_state.bd_v2_research_trace)
+        else:
+            from src.vietnam_bd.models import AnalysisResult
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["기회 해석", "DX 관점", "미팅", "내부 사례", "Next Step"])
-        with tab1:
-            render_qualification(result)
-        with tab2:
-            render_dx(result)
-        with tab3:
-            render_meeting(result)
-        with tab4:
-            render_internal(result)
-        with tab5:
-            render_next_steps(result)
+            result = AnalysisResult.model_validate(st.session_state.bd_result)
+            render_overview(result)
+
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["기회 해석", "DX 관점", "미팅", "내부 사례", "Next Step"])
+            with tab1:
+                render_qualification(result)
+            with tab2:
+                render_dx(result)
+            with tab3:
+                render_meeting(result)
+            with tab4:
+                render_internal(result)
+            with tab5:
+                render_next_steps(result)
 
         st.download_button(
             "분석 결과 JSON 다운로드",
             data=json.dumps(result.model_dump(), ensure_ascii=False, indent=2),
-            file_name="opportunity_analysis.json",
+            file_name="opportunity_analysis_v2.json" if st.session_state.bd_result_version == "v2" else "opportunity_analysis.json",
             mime="application/json",
             use_container_width=True,
         )
