@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 Credibility = Literal["confirmed", "likely", "hypothesis", "unknown"]
@@ -289,6 +289,13 @@ class MustKnowItem(BaseModel):
     evidence_labels: list[str] = Field(default_factory=list, max_length=8)
     suggested_way_to_check: str
 
+    @field_validator("evidence_labels", mode="before")
+    @classmethod
+    def bound_evidence_labels(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return list(dict.fromkeys(label for label in value if isinstance(label, str) and label))[:8]
+
 
 class ProposalHypothesis(BaseModel):
     rank: int = Field(ge=1, le=3)
@@ -299,6 +306,13 @@ class ProposalHypothesis(BaseModel):
     conditions_to_confirm: list[str] = Field(default_factory=list, max_length=4)
     evidence_labels: list[str] = Field(default_factory=list, max_length=8)
     portfolio_source_url: str = ""
+
+    @field_validator("evidence_labels", mode="before")
+    @classmethod
+    def bound_evidence_labels(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return list(dict.fromkeys(label for label in value if isinstance(label, str) and label))[:8]
 
 
 class SFDCOpportunity(BaseModel):

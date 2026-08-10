@@ -14,6 +14,8 @@ from src.vietnam_bd.models import (
     RelationshipDecisionMap,
     StageGate,
     BusinessDevelopmentDecision,
+    MustKnowItem,
+    ProposalHypothesis,
 )
 from pydantic import ValidationError
 from src.vietnam_bd.reasoning import (
@@ -185,6 +187,27 @@ class RelationshipIntegrityTest(unittest.TestCase):
 
 
 class ProposalAndInternalDataTest(unittest.TestCase):
+    def test_output_models_normalize_long_provenance_on_direct_validation(self) -> None:
+        labels = [f"source-{index}" for index in range(21)]
+        must_know = MustKnowItem.model_validate({
+            "rank": 1,
+            "question": "Who owns the package?",
+            "why_it_matters": "Changes the route",
+            "decision_impact": ["actor"],
+            "evidence_labels": labels,
+            "suggested_way_to_check": "Ask the owner",
+        })
+        proposal = ProposalHypothesis.model_validate({
+            "rank": 1,
+            "workstream": "Facility Energy",
+            "capability": "SmartThings Pro",
+            "hypothesis": "Conditional proposal",
+            "mode": "conditional",
+            "evidence_labels": labels,
+        })
+        self.assertEqual(len(must_know.evidence_labels), 8)
+        self.assertEqual(len(proposal.evidence_labels), 8)
+
     def test_long_research_provenance_is_bounded_at_output_models(self) -> None:
         rules = rule("사업기획", "targeting")
         matches = match_dx_portfolio(rules.context)
