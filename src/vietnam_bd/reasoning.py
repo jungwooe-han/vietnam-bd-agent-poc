@@ -465,6 +465,10 @@ def build_must_know_top3(
     if decision.decision == "closed":
         return []
     candidates: list[MustKnowItem] = []
+
+    def limited_labels(labels: list[str]) -> list[str]:
+        return list(dict.fromkeys(label for label in labels if label))[:8]
+
     role_priority = {"EPC": 0, "Architect": 1, "PM / CM": 2, "GC": 3, "MEP": 4, "Owner / End Client": 5, "Local Subsidiary": 6, "Key Vendor": 7}
     uncertain_actors = sorted(
         (actor for actor in relationship_map.actors if actor.actor_status != "confirmed" and actor.role not in {"HQ", "Authority"}),
@@ -479,7 +483,7 @@ def build_must_know_top3(
             why_it_matters="이 Actor의 확정 여부가 접촉 대상과 구매경로를 변경합니다.",
             decision_impact=["actor", "buying_route", "decision"],
             actor_ids=[actor.actor_id],
-            evidence_labels=actor.evidence_labels,
+            evidence_labels=limited_labels(actor.evidence_labels),
             suggested_way_to_check=f"Owner PM 또는 조달 조직에 {actor.role} 선정 상태와 책임 범위를 확인합니다.",
         ))
     for match in dx_matches:
@@ -494,7 +498,7 @@ def build_must_know_top3(
                 why_it_matters="답에 따라 DX 판매 Scope, Workstream 또는 제안 구체화 여부가 달라집니다.",
                 decision_impact=["scope", "workstream", "decision"],
                 actor_ids=related,
-                evidence_labels=match.evidence_labels,
+                evidence_labels=limited_labels(match.evidence_labels),
                 suggested_way_to_check="관련 Owner/EPC 설계·구매 담당자에게 Scope와 발주 상태를 확인합니다.",
             ))
     for gap in [gap for rnd in bundle.research_rounds for gap in rnd.research_gaps if gap.critical]:
@@ -542,7 +546,7 @@ def build_proposal_hypotheses(
             ),
             mode="actionable" if decision.decision == "now" else "conditional",
             conditions_to_confirm=[] if decision.decision == "now" else conditions,
-            evidence_labels=match.evidence_labels,
+            evidence_labels=list(dict.fromkeys(label for label in match.evidence_labels if label))[:8],
             portfolio_source_url=match.source_url,
         ))
         if len(proposals) == 3:

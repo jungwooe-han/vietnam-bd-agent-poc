@@ -11,6 +11,7 @@ from src.vietnam_bd.models import (
     EvidenceItem,
     IntelligenceItem,
     ProjectIntelligence,
+    RelationshipDecisionMap,
     StageGate,
     BusinessDevelopmentDecision,
 )
@@ -184,6 +185,21 @@ class RelationshipIntegrityTest(unittest.TestCase):
 
 
 class ProposalAndInternalDataTest(unittest.TestCase):
+    def test_long_research_provenance_is_bounded_at_output_models(self) -> None:
+        rules = rule("사업기획", "targeting")
+        matches = match_dx_portfolio(rules.context)
+        self.assertTrue(matches)
+        matches[0].evidence_labels = [f"source-{index}" for index in range(20)]
+        decision = decide_business_development(bundle(), rules, ProjectIntelligence(), matches)
+        must_knows = build_must_know_top3(
+            bundle(), decision, RelationshipDecisionMap(), matches,
+        )
+        proposals = build_proposal_hypotheses(decision, matches, must_knows)
+        self.assertTrue(must_knows)
+        self.assertTrue(proposals)
+        self.assertLessEqual(len(must_knows[0].evidence_labels), 8)
+        self.assertLessEqual(len(proposals[0].evidence_labels), 8)
+
     def test_monitor_keeps_conditional_proposal_hypothesis(self) -> None:
         rules = rule("사업기획", "targeting")
         matches = match_dx_portfolio(rules.context)
