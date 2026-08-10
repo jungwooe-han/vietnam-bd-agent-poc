@@ -68,9 +68,11 @@ class DeepResearchResult(BaseModel):
 
 class DiscoveredEntity(BaseModel):
     name: str
-    entity_type: Literal["company", "project", "owner", "architect", "consultant", "epc", "gc", "vendor", "location", "other"]
+    entity_type: Literal["company", "project", "owner", "hq", "local_subsidiary", "architect", "consultant", "pm_cm", "epc", "gc", "mep", "vendor", "authority", "location", "other"]
     credibility: Credibility
     evidence_labels: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list, max_length=8)
+    source_dates: list[str] = Field(default_factory=list, max_length=8)
 
 
 class ResearchGap(BaseModel):

@@ -16,6 +16,9 @@ class EvidenceItem(BaseModel):
     credibility: Credibility
     rationale: str
     source_labels: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list, max_length=10)
+    source_dates: list[str] = Field(default_factory=list, max_length=10)
+    source_conflicts: list[str] = Field(default_factory=list, max_length=5)
 
 
 # Existing BD result models. Keep these names stable for analysis.py, demo, and UI.
@@ -135,6 +138,7 @@ class InformationToConfirm(BaseModel):
 
 
 class BDV2Stakeholder(BaseModel):
+    actor_id: str = ""
     role: str
     organization_or_candidate: str | None = None
     priority: Literal["primary", "secondary", "optional"]
@@ -176,7 +180,7 @@ class BDV2SimilarCase(BaseModel):
 
 
 class BusinessDevelopmentDecision(BaseModel):
-    decision: Literal["now", "needs_confirm", "monitor", "closed"]
+    decision: Literal["now", "monitor", "closed"]
     headline: str
     rationale: str
     context_basis: list[str] = Field(default_factory=list, max_length=8)
@@ -184,6 +188,10 @@ class BusinessDevelopmentDecision(BaseModel):
     action_direction: str
     trigger_to_reassess: str = ""
     priority_window: bool = False
+    intervention_possible: bool = False
+    scope_open: bool = False
+    dx_addressable: bool = False
+    evidence_sufficient: bool = False
 
 
 class IntelligenceItem(BaseModel):
@@ -200,12 +208,15 @@ class ProjectActor(BaseModel):
     actor_id: str
     role: str
     organization: str
-    temporal_scope: Literal["current", "historical", "candidate"]
+    temporal_scope: Literal["current", "historical", "candidate", "unknown"]
+    actor_status: Literal["confirmed", "likely", "candidate", "unknown"] = "unknown"
     participation_status: str
     credibility: Credibility
     rationale: str = ""
     evidence_labels: list[str] = Field(default_factory=list, max_length=8)
     source_urls: list[str] = Field(default_factory=list, max_length=8)
+    source_dates: list[str] = Field(default_factory=list, max_length=8)
+    confirmation_needed: str = ""
 
 
 class ProjectRelationship(BaseModel):
@@ -213,10 +224,11 @@ class ProjectRelationship(BaseModel):
     to_actor_id: str
     relationship_type: str
     description: str = ""
-    temporal_scope: Literal["current", "historical", "candidate"]
+    temporal_scope: Literal["current", "historical", "candidate", "unknown"]
     credibility: Credibility
     evidence_labels: list[str] = Field(default_factory=list, max_length=8)
     source_urls: list[str] = Field(default_factory=list, max_length=8)
+    source_dates: list[str] = Field(default_factory=list, max_length=8)
 
 
 class RelationshipDecisionMap(BaseModel):
@@ -259,12 +271,48 @@ class ProjectIntelligence(BaseModel):
 
 
 class StakeholderMeetingPlan(BaseModel):
+    actor_id: str = ""
     stakeholder_role: str
     why_meet: str
     information_to_obtain: list[str] = Field(default_factory=list, max_length=6)
     open: list[TalkingPoint] = Field(default_factory=list, max_length=3)
     power: list[TalkingPoint] = Field(default_factory=list, max_length=3)
     win: list[TalkingPoint] = Field(default_factory=list, max_length=3)
+
+
+class MustKnowItem(BaseModel):
+    rank: int = Field(ge=1, le=3)
+    question: str
+    why_it_matters: str
+    decision_impact: list[Literal["scope", "actor", "buying_route", "workstream", "decision"]] = Field(default_factory=list)
+    actor_ids: list[str] = Field(default_factory=list, max_length=5)
+    evidence_labels: list[str] = Field(default_factory=list, max_length=8)
+    suggested_way_to_check: str
+
+
+class ProposalHypothesis(BaseModel):
+    rank: int = Field(ge=1, le=3)
+    workstream: str
+    capability: str
+    hypothesis: str
+    mode: Literal["actionable", "conditional"]
+    conditions_to_confirm: list[str] = Field(default_factory=list, max_length=4)
+    evidence_labels: list[str] = Field(default_factory=list, max_length=8)
+    portfolio_source_url: str = ""
+
+
+class SFDCOpportunity(BaseModel):
+    oppty: str
+    account: str
+    vertical: str
+    size: str
+    owner: str
+
+
+class SFDCMatch(BaseModel):
+    record: SFDCOpportunity
+    similarity_reason: str
+    match_score: int = Field(ge=0, le=100)
 
 
 class BDV2AnalysisResult(BaseModel):
@@ -289,3 +337,6 @@ class BDV2AnalysisResult(BaseModel):
     project_intelligence: ProjectIntelligence = Field(default_factory=ProjectIntelligence)
     relationship_map: RelationshipDecisionMap = Field(default_factory=RelationshipDecisionMap)
     stakeholder_meeting_plans: list[StakeholderMeetingPlan] = Field(default_factory=list, max_length=6)
+    must_know_top3: list[MustKnowItem] = Field(default_factory=list, max_length=3)
+    proposal_hypotheses: list[ProposalHypothesis] = Field(default_factory=list, max_length=3)
+    sample_sfdc_matches: list[SFDCMatch] = Field(default_factory=list, max_length=5)

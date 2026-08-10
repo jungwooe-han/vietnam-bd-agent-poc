@@ -19,19 +19,23 @@ from .models import (
     ExcludedWorkstream,
     InformationToConfirm,
     MeetingTalkingPoints,
+    MustKnowItem,
     NextBestAction,
     IntelligenceItem,
     PartnerPattern,
     ProjectActor,
     ProjectIntelligence,
     ProjectRelationship,
+    ProposalHypothesis,
     RelationshipDecisionMap,
     StakeholderMeetingPlan,
     TimelineItem,
     WorkstreamRecommendation,
 )
+from .dx_portfolio import DXPortfolioMatch, match_dx_portfolio
 from .research_models import ResearchBundle, ResearchEvidence
 from .rule_engine import RuleEngineResult
+from .sfdc_sample import match_sample_opportunities
 from .v2_prompts import commercial_prompt, engagement_prompt, workstream_prompt
 from .vertical_guardrails import DEFAULT_WORKSTREAM_GUARDRAILS, WorkstreamGuardrail, allowed_workstream_candidates
 
@@ -138,6 +142,11 @@ def _evidence_items(bundle: ResearchBundle) -> list[EvidenceItem]:
                 credibility=item.credibility,
                 rationale=item.rationale or "Research evidence",
                 source_labels=labels,
+                source_urls=list(dict.fromkeys(
+                    value for value in (item.source_url, *(source.url for source in item.sources)) if value
+                )),
+                source_dates=list(dict.fromkeys(source.published_date for source in item.sources if source.published_date)),
+                source_conflicts=[source.name for source in item.sources if source.stance == "contradicts"],
             )
         )
     return result[:15]
@@ -258,14 +267,26 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
         (bundle.seed_understanding.owner_candidate if bundle.seed_understanding else "")
         or bundle.quick.company or intelligence.owner_summary or "Owner / End Client"
     )
+    owner_evidence = [
+        item for item in [*bundle.quick.recent_project_signals, *(bundle.deep.project_facts if bundle.deep else [])]
+        if owner_name.casefold() in f"{item.claim} {item.rationale}".casefold()
+    ]
+    owner_labels = list(dict.fromkeys(label for item in owner_evidence for label in _labels(item)[0]))
+    owner_urls = list(dict.fromkeys(url for item in owner_evidence for url in _labels(item)[1]))
+    owner_dates = list(dict.fromkeys(date for item in owner_evidence for date in _labels(item)[2]))
     actors = [ProjectActor(
         actor_id="owner",
         role="Owner / End Client",
         organization=owner_name,
         temporal_scope="current",
+        actor_status="confirmed" if owner_urls else "likely" if owner_labels else "unknown",
         participation_status="Project owner / check direct evidence",
-        credibility="likely" if owner_name != "Owner / End Client" else "unknown",
+        credibility="confirmed" if owner_urls else "likely" if owner_labels else "unknown",
         rationale="Seed and account research owner context.",
+        evidence_labels=owner_labels,
+        source_urls=owner_urls,
+        source_dates=owner_dates,
+        confirmation_needed="Confirm legal project owner" if not owner_urls else "",
     )]
     relationships = []
     used_ids = {"owner"}
@@ -273,6 +294,12 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
         "architect": "설계 계약", "consultant": "자문 / 설계 지원", "epc": "EPC 발주",
         "gc": "공사 발주", "vendor": "Package / Solution 공급", "authority": "인허가 관계",
         "company": "사업 참여", "project": "사업 주체", "owner": "투자 / 의사결정",
+    }
+    role_labels = {
+        "hq": "HQ", "owner": "Owner / End Client", "local_subsidiary": "Local Subsidiary",
+        "architect": "Architect", "consultant": "PM / CM", "pm_cm": "PM / CM",
+        "epc": "EPC", "gc": "GC", "mep": "MEP", "vendor": "Key Vendor",
+        "authority": "Authority",
     }
     candidate_names = " ".join(item.claim for item in intelligence.ecosystem_candidates).casefold()
     historical_names = " ".join(item.claim for item in intelligence.historical_projects).casefold()
@@ -288,13 +315,23 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
             name_key = entity.name.casefold()
             temporal = "candidate" if name_key in candidate_names else "historical" if name_key in historical_names else "current"
             credibility = entity.credibility
-            if temporal in {"candidate", "historical"} and credibility == "confirmed":
+            if temporal in {"candidate", "historical"}:
                 credibility = "hypothesis"
+                actor_status = "candidate"
+            elif not entity.evidence_labels and not entity.source_urls:
+                credibility = "unknown"
+                actor_status = "unknown"
+            elif credibility == "confirmed" and not entity.source_urls:
+                credibility = "likely"
+                actor_status = "likely"
+            else:
+                actor_status = "confirmed" if credibility == "confirmed" else "likely" if credibility == "likely" else "unknown"
             actors.append(ProjectActor(
                 actor_id=actor_id,
-                role=entity.entity_type.replace("_", " ").title(),
+                role=role_labels.get(entity.entity_type, entity.entity_type.replace("_", " ").title()),
                 organization=entity.name,
                 temporal_scope=temporal,
+                actor_status=actor_status,
                 participation_status=(
                     "Current project participation unconfirmed" if temporal != "current"
                     else "Current project participant / verify relationship"
@@ -302,6 +339,9 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 credibility=credibility,
                 rationale="Discovered during iterative research.",
                 evidence_labels=entity.evidence_labels,
+                source_urls=entity.source_urls,
+                source_dates=entity.source_dates,
+                confirmation_needed=(f"Confirm whether {entity.name} is the current {role_labels.get(entity.entity_type, entity.entity_type)}" if actor_status != "confirmed" else ""),
             ))
             relationships.append(ProjectRelationship(
                 from_actor_id="owner",
@@ -311,7 +351,28 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 temporal_scope=temporal,
                 credibility=credibility,
                 evidence_labels=entity.evidence_labels,
+                source_urls=entity.source_urls,
+                source_dates=entity.source_dates,
             ))
+    present_roles = {
+        actor.role for actor in actors
+        if actor.temporal_scope == "current" and actor.actor_status in {"confirmed", "likely"}
+    }
+    for role in ("HQ", "Local Subsidiary", "Architect", "PM / CM", "EPC", "GC", "MEP", "Key Vendor", "Authority"):
+        if role in present_roles:
+            continue
+        actor_id = "unknown_" + role.casefold().replace(" / ", "_").replace(" ", "_")
+        actors.append(ProjectActor(
+            actor_id=actor_id,
+            role=role,
+            organization="UNKNOWN",
+            temporal_scope="unknown",
+            actor_status="unknown",
+            participation_status="Research did not identify the current organization.",
+            credibility="unknown",
+            rationale="No current-project evidence identified this role.",
+            confirmation_needed=f"Confirm current {role}",
+        ))
     return RelationshipDecisionMap(
         actors=actors[:20],
         relationships=relationships[:30],
@@ -320,20 +381,51 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
     )
 
 
+def _has_supported_open_scope(intelligence: ProjectIntelligence) -> bool:
+    return any(
+        item.credibility in {"confirmed", "likely"} and bool(item.evidence_labels or item.source_urls)
+        for item in intelligence.open_scopes
+    )
+
+
+def _has_supported_closure(intelligence: ProjectIntelligence) -> bool:
+    closure_terms = ("awarded", "completed", "operational", "operation permit", "수주", "발주 완료", "준공", "운영")
+    return any(
+        item.credibility in {"confirmed", "likely"}
+        and bool(item.evidence_labels or item.source_urls)
+        and any(term in f"{item.claim} {item.rationale}".casefold() for term in closure_terms)
+        for item in [*intelligence.current_project_facts, *intelligence.project_ecosystem]
+    )
+
+
 def decide_business_development(
     bundle: ResearchBundle,
     rule_result: RuleEngineResult,
     intelligence: ProjectIntelligence,
+    dx_matches: list[DXPortfolioMatch],
 ) -> BusinessDevelopmentDecision:
     status = rule_result.stage_gate.status
-    if status == "closed":
+    stage = rule_result.context.business_stage
+    stage_supported = stage.credibility in {"confirmed", "likely"} and bool(stage.source_labels)
+    intervention_possible = status in {"targeting", "golden_time", "local_action"}
+    scope_open = _has_supported_open_scope(intelligence)
+    if status in {"targeting", "golden_time"} and not scope_open:
+        scope_open = bool(
+            intelligence.current_project_facts
+            and rule_result.context.business_structure
+            and any(item.source_labels for item in rule_result.context.business_structure)
+        )
+    dx_addressable = bool(dx_matches)
+    evidence_sufficient = bool(
+        stage_supported
+        and any(match.evidence_labels for match in dx_matches)
+        and (scope_open or status == "closed")
+    )
+    closed_supported = status == "closed" and stage_supported and _has_supported_closure(intelligence)
+    if closed_supported:
         decision, headline, direction = "closed", "CLOSED · Active Pursuit Stop", "현재건 공략을 중단하고 참여·발주 구조를 다음 기회에 활용"
-    elif status == "golden_time":
-        decision, headline, direction = "now", "NOW · PRIORITY WINDOW", "설계·Spec·Partner 구조에 즉시 영향력 확보"
-    elif status == "targeting":
-        decision, headline, direction = "now", "NOW · EARLY POSITIONING", "관계 형성과 사업구도 선점"
-    elif status == "local_action" and intelligence.open_scopes:
-        decision, headline, direction = "needs_confirm", "NEEDS CONFIRM · Remaining Scope", "미발주·구매경로·변경 범위를 우선 확인"
+    elif intervention_possible and scope_open and dx_addressable and evidence_sufficient:
+        decision, headline, direction = "now", "NOW · ACTIONABLE WINDOW", "확인된 Scope와 구매경로를 기준으로 즉시 개입"
     else:
         decision, headline, direction = "monitor", "MONITOR · Wait for Trigger", "Actor 선정·Tender·인허가 등 진입 Trigger 추적"
     context = rule_result.context
@@ -347,13 +439,142 @@ def decide_business_development(
     return BusinessDevelopmentDecision(
         decision=decision,
         headline=headline,
-        rationale=rule_result.stage_gate.rationale,
+        rationale=(
+            f"Lifecycle={status}; intervention={intervention_possible}; scope_open={scope_open}; "
+            f"dx_addressable={dx_addressable}; evidence_sufficient={evidence_sufficient}; "
+            f"closed_evidence={closed_supported}. {rule_result.stage_gate.rationale}"
+        ),
         context_basis=basis[:8],
         evidence_labels=labels[:8],
         action_direction=direction,
         trigger_to_reassess=intelligence.next_trigger,
-        priority_window=status == "golden_time",
+        priority_window=decision == "now",
+        intervention_possible=intervention_possible,
+        scope_open=scope_open,
+        dx_addressable=dx_addressable,
+        evidence_sufficient=evidence_sufficient,
     )
+
+
+def build_must_know_top3(
+    bundle: ResearchBundle,
+    decision: BusinessDevelopmentDecision,
+    relationship_map: RelationshipDecisionMap,
+    dx_matches: list[DXPortfolioMatch],
+) -> list[MustKnowItem]:
+    if decision.decision == "closed":
+        return []
+    candidates: list[MustKnowItem] = []
+    role_priority = {"EPC": 0, "Architect": 1, "PM / CM": 2, "GC": 3, "MEP": 4, "Owner / End Client": 5, "Local Subsidiary": 6, "Key Vendor": 7}
+    uncertain_actors = sorted(
+        (actor for actor in relationship_map.actors if actor.actor_status != "confirmed" and actor.role not in {"HQ", "Authority"}),
+        key=lambda actor: (role_priority.get(actor.role, 99), actor.actor_id),
+    )
+    actor_limit = 2 if dx_matches else 3
+    for actor in uncertain_actors[:actor_limit]:
+        question = actor.confirmation_needed or f"현재 프로젝트의 {actor.role} 조직은 어디인가?"
+        candidates.append(MustKnowItem(
+            rank=1,
+            question=question,
+            why_it_matters="이 Actor의 확정 여부가 접촉 대상과 구매경로를 변경합니다.",
+            decision_impact=["actor", "buying_route", "decision"],
+            actor_ids=[actor.actor_id],
+            evidence_labels=actor.evidence_labels,
+            suggested_way_to_check=f"Owner PM 또는 조달 조직에 {actor.role} 선정 상태와 책임 범위를 확인합니다.",
+        ))
+    for match in dx_matches:
+        for question in match.must_know_candidates[:2]:
+            related = [
+                actor.actor_id for actor in relationship_map.actors
+                if actor.role.casefold() in " ".join(match.target_roles).casefold()
+            ][:3]
+            candidates.append(MustKnowItem(
+                rank=1,
+                question=question,
+                why_it_matters="답에 따라 DX 판매 Scope, Workstream 또는 제안 구체화 여부가 달라집니다.",
+                decision_impact=["scope", "workstream", "decision"],
+                actor_ids=related,
+                evidence_labels=match.evidence_labels,
+                suggested_way_to_check="관련 Owner/EPC 설계·구매 담당자에게 Scope와 발주 상태를 확인합니다.",
+            ))
+    for gap in [gap for rnd in bundle.research_rounds for gap in rnd.research_gaps if gap.critical]:
+        candidates.append(MustKnowItem(
+            rank=1,
+            question=gap.topic,
+            why_it_matters=gap.sales_impact or "답에 따라 최종 BD 행동이 달라집니다.",
+            decision_impact=["decision"],
+            suggested_way_to_check="현재 프로젝트의 직접 관계자 또는 공식 조달 자료로 확인합니다.",
+        ))
+    unique: list[MustKnowItem] = []
+    seen: set[str] = set()
+    for item in candidates:
+        key = item.question.casefold().strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(item.model_copy(update={"rank": len(unique) + 1}))
+        if len(unique) == 3:
+            break
+    return unique
+
+
+def build_proposal_hypotheses(
+    decision: BusinessDevelopmentDecision,
+    dx_matches: list[DXPortfolioMatch],
+    must_knows: list[MustKnowItem],
+) -> list[ProposalHypothesis]:
+    if decision.decision == "closed":
+        return []
+    proposals = []
+    conditions = [item.question for item in must_knows[:2]]
+    for match in dx_matches:
+        if not match.evidence_labels:
+            continue
+        workstream = match.workstreams[0] if match.workstreams else match.capability
+        proposals.append(ProposalHypothesis(
+            rank=len(proposals) + 1,
+            workstream=workstream,
+            capability=match.capability,
+            hypothesis=(
+                f"확인된 고객 Need와 Scope를 기반으로 {match.capability} 관점의 공략안을 구체화합니다."
+                if decision.decision == "now"
+                else f"현재 Research 기준 {match.capability} 적용 가능성이 있으나 Scope·구매경로·Actor 확인 후 구체화합니다."
+            ),
+            mode="actionable" if decision.decision == "now" else "conditional",
+            conditions_to_confirm=[] if decision.decision == "now" else conditions,
+            evidence_labels=match.evidence_labels,
+            portfolio_source_url=match.source_url,
+        ))
+        if len(proposals) == 3:
+            break
+    return proposals
+
+
+def align_stakeholders_to_relationship_map(
+    stakeholders: list[BDV2Stakeholder],
+    relationship_map: RelationshipDecisionMap,
+    must_knows: list[MustKnowItem],
+) -> list[BDV2Stakeholder]:
+    required_ids = list(dict.fromkeys(actor_id for item in must_knows for actor_id in item.actor_ids))
+    actor_by_id = {actor.actor_id: actor for actor in relationship_map.actors}
+    aligned: list[BDV2Stakeholder] = []
+    for actor_id in required_ids:
+        actor = actor_by_id.get(actor_id)
+        if not actor:
+            continue
+        existing = next((item for item in stakeholders if item.role.casefold() == actor.role.casefold()), None)
+        aligned.append(BDV2Stakeholder(
+            actor_id=actor.actor_id,
+            role=actor.role,
+            organization_or_candidate=None if actor.organization == "UNKNOWN" else actor.organization,
+            priority=existing.priority if existing else "primary" if not aligned else "secondary",
+            credibility=actor.credibility,
+            why_meet=existing.why_meet if existing else "Must Know 확인을 통해 Scope와 구매경로를 결정합니다.",
+            information_to_get=existing.information_to_get if existing else [item.question for item in must_knows if actor_id in item.actor_ids][:5],
+            evidence_labels=actor.evidence_labels,
+            rationale=actor.rationale,
+        ))
+    return aligned[:6]
 
 
 def _validated_workstreams(result: WorkstreamReasoning, candidates: list[str]) -> WorkstreamReasoning:
@@ -392,7 +613,7 @@ def select_workstreams(
     intelligence: ProjectIntelligence | None = None,
 ) -> WorkstreamReasoning:
     candidates = allowed_workstream_candidates(rule_result.context, catalog)
-    if rule_result.stage_gate.active_pursuit == "stop" or (decision and decision.decision in {"monitor", "closed"}):
+    if decision and decision.decision in {"monitor", "closed"}:
         return WorkstreamReasoning(
             excluded_workstreams=[
                 ExcludedWorkstream(workstream=name, reason="Closed project: active pursuit stopped.")
@@ -435,7 +656,7 @@ def assess_commercial_entry(
         payload["business_development_decision"] = decision.model_dump(mode="json")
     if intelligence:
         payload["project_intelligence"] = intelligence.model_dump(mode="json")
-    closed = rule_result.stage_gate.active_pursuit == "stop"
+    closed = bool(decision and decision.decision == "closed")
     result = runner(commercial_prompt(payload, closed), CommercialReasoning)
     result.stakeholders = _validate_stakeholders(result.stakeholders)
     if closed:
@@ -460,7 +681,7 @@ def build_engagement_intelligence(
     decision: BusinessDevelopmentDecision | None = None,
     intelligence: ProjectIntelligence | None = None,
 ) -> EngagementReasoning:
-    if rule_result.stage_gate.active_pursuit == "stop" or (decision and decision.decision in {"monitor", "closed"}):
+    if decision and decision.decision in {"monitor", "closed"}:
         return EngagementReasoning(talking_points=MeetingTalkingPoints())
     payload = _payload(bundle, rule_result, seed)
     payload["selected_workstreams"] = workstreams.model_dump(mode="json")
@@ -476,6 +697,63 @@ def build_engagement_intelligence(
     return result
 
 
+def enforce_stage_gate_output(result: BDV2AnalysisResult) -> BDV2AnalysisResult:
+    """Apply deterministic output policy after all probabilistic reasoning.
+
+    Prompts guide the model, but the stage gate is a business rule and must also
+    be enforced on the structured result returned to API/UI callers.
+    """
+
+    gate = result.stage_gate
+    decision = result.bd_decision.decision
+
+    if decision == "closed":
+        stopped_entry = CanWeEnter(
+            timing=AccessibilityFactor(
+                level="low",
+                rationale="현재 프로젝트는 종료 단계이므로 능동 공략 시점이 지났습니다.",
+                evidence_labels=result.context.business_stage.source_labels,
+            ),
+            access=AccessibilityFactor(
+                level="unknown",
+                rationale="현재 건의 신규 진입 경로는 평가하지 않습니다.",
+                evidence_labels=[],
+            ),
+            openness=AccessibilityFactor(
+                level="low",
+                rationale="현재 프로젝트의 미확정 범위를 전제로 영업 기회를 만들지 않습니다.",
+                evidence_labels=result.context.business_stage.source_labels,
+            ),
+            fit=AccessibilityFactor(
+                level="unknown",
+                rationale="현재 건의 적합성 평가는 중단하고 향후 O&M·리트로핏·증설을 별도 기회로 다룹니다.",
+                evidence_labels=[],
+            ),
+            overall_view="현재 프로젝트 Active Pursuit 중단. 제한된 과거 정보만 다음 기회에 활용합니다.",
+        )
+        return result.model_copy(update={
+            "workstreams": [],
+            "information_to_confirm": [],
+            "stakeholders": [],
+            "talking_points": MeetingTalkingPoints(),
+            "next_best_actions": [],
+            "stakeholder_meeting_plans": [],
+            "can_we_enter": stopped_entry,
+        })
+
+    if decision == "monitor":
+        # Monitoring may retain decision-changing unknowns and role-level check
+        # targets, but must not leak active-pursuit recommendations.
+        return result.model_copy(update={
+            "workstreams": [],
+            "talking_points": MeetingTalkingPoints(),
+            "next_best_actions": [],
+            "stakeholder_meeting_plans": [],
+        })
+
+    return result
+
+
 def reason_opportunity_v2(
     bundle: ResearchBundle,
     rule_result: RuleEngineResult,
@@ -486,7 +764,10 @@ def reason_opportunity_v2(
 ) -> BDV2AnalysisResult:
     intelligence = build_project_intelligence(bundle)
     relationship_map = build_relationship_map(bundle, intelligence)
-    decision = decide_business_development(bundle, rule_result, intelligence)
+    dx_matches = match_dx_portfolio(rule_result.context)
+    decision = decide_business_development(bundle, rule_result, intelligence, dx_matches)
+    must_knows = build_must_know_top3(bundle, decision, relationship_map, dx_matches)
+    proposals = build_proposal_hypotheses(decision, dx_matches, must_knows)
     workstreams = select_workstreams(
         bundle, rule_result, seed=seed, runner=runner, catalog=catalog,
         decision=decision, intelligence=intelligence,
@@ -494,6 +775,9 @@ def reason_opportunity_v2(
     commercial = assess_commercial_entry(
         bundle, rule_result, workstreams, seed=seed, runner=runner,
         decision=decision, intelligence=intelligence,
+    )
+    commercial.stakeholders = align_stakeholders_to_relationship_map(
+        commercial.stakeholders, relationship_map, must_knows,
     )
     engagement = build_engagement_intelligence(
         bundle, rule_result, workstreams, commercial, seed=seed, runner=runner,
@@ -506,9 +790,10 @@ def reason_opportunity_v2(
     if rule_result.stage_gate.active_pursuit == "stop":
         limitations.insert(0, "Closed project: active pursuit outputs are intentionally suppressed.")
     meeting_plans = []
-    if commercial.stakeholders and decision.decision in {"now", "needs_confirm"}:
+    if commercial.stakeholders and decision.decision == "now":
         for stakeholder in commercial.stakeholders:
             meeting_plans.append(StakeholderMeetingPlan(
+                actor_id=stakeholder.actor_id,
                 stakeholder_role=stakeholder.role,
                 why_meet=stakeholder.why_meet,
                 information_to_obtain=stakeholder.information_to_get,
@@ -516,7 +801,7 @@ def reason_opportunity_v2(
                 power=engagement.talking_points.power,
                 win=engagement.talking_points.win,
             ))
-    return BDV2AnalysisResult(
+    result = BDV2AnalysisResult(
         opportunity_title=title,
         executive_summary=summary,
         evidence=_evidence_items(bundle),
@@ -536,4 +821,12 @@ def reason_opportunity_v2(
         project_intelligence=intelligence,
         relationship_map=relationship_map,
         stakeholder_meeting_plans=meeting_plans,
+        must_know_top3=must_knows,
+        proposal_hypotheses=proposals,
+        sample_sfdc_matches=match_sample_opportunities(
+            bundle.quick.company,
+            rule_result.context,
+            [item.workstream for item in proposals],
+        ),
     )
+    return enforce_stage_gate_output(result)

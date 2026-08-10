@@ -48,6 +48,12 @@ def _evidence_detail(title: str, items: list[EvidenceItem]) -> None:
             st.caption(item.rationale)
             if item.source_labels:
                 st.caption("Source: " + " · ".join(item.source_labels))
+            if item.source_urls:
+                st.caption("URL: " + " · ".join(item.source_urls))
+            if item.source_dates:
+                st.caption("Date: " + " · ".join(item.source_dates))
+            if item.source_conflicts:
+                st.warning("Conflict: " + " · ".join(item.source_conflicts))
 
 
 def _stage_progress(current: str) -> None:
@@ -74,7 +80,7 @@ def _render_relationship_map(result: BDV2AnalysisResult) -> None:
     lines = ["digraph G {", 'rankdir="LR";', 'graph [bgcolor="transparent", pad="0.2"];', 'node [shape="box", style="rounded,filled", fontname="Arial", fontsize="10"];']
     for actor in relationship_map.actors:
         color = {"current": "#dfe6ff", "historical": "#eef0f4", "candidate": "#fff1c7"}[actor.temporal_scope]
-        label = f"{actor.role}\\n{actor.organization}\\n{actor.temporal_scope} · {actor.credibility}".replace('"', "'")
+        label = f"{actor.role}\\n{actor.organization}\\n{actor.actor_status.upper()}".replace('"', "'")
         lines.append(f'"{actor.actor_id}" [label="{label}", fillcolor="{color}"];')
     for edge in relationship_map.relationships:
         if edge.from_actor_id in actor_ids and edge.to_actor_id in actor_ids:
@@ -89,10 +95,16 @@ def _render_relationship_map(result: BDV2AnalysisResult) -> None:
             st.markdown(f"- **{actor.role}: {actor.organization}** · {actor.temporal_scope} / {actor.credibility}")
     with st.expander("Relationship provenance"):
         for actor in relationship_map.actors:
-            st.markdown(f"**{actor.role} · {actor.organization}** — {actor.temporal_scope} / {actor.credibility}")
+            st.markdown(f"**{actor.role} · {actor.organization}** — `{actor.actor_status.upper()}`")
             st.caption(actor.participation_status + (f" · {actor.rationale}" if actor.rationale else ""))
+            if actor.confirmation_needed:
+                st.markdown(f"**확인 필요:** {actor.confirmation_needed}")
             if actor.evidence_labels:
                 st.caption("Evidence: " + " · ".join(actor.evidence_labels))
+            if actor.source_urls:
+                st.caption("Sources: " + " · ".join(actor.source_urls))
+            if actor.source_dates:
+                st.caption("Dates: " + " · ".join(actor.source_dates))
         for edge in relationship_map.relationships:
             st.markdown(f"- `{edge.from_actor_id}` → `{edge.to_actor_id}` · {edge.relationship_type} · {edge.temporal_scope}/{edge.credibility}")
 
@@ -101,16 +113,6 @@ def render_page_1_opportunity(result: BDV2AnalysisResult) -> None:
     inject_v2_css()
     st.markdown("<div class='v2-kicker'>PAGE 1 · OPPORTUNITY DECISION</div>", unsafe_allow_html=True)
     st.title(result.opportunity_title)
-    factors = (("TIMING", result.can_we_enter.timing), ("ACCESS", result.can_we_enter.access), ("FIT", result.can_we_enter.fit))
-    cols = st.columns(3)
-    for col, (label, factor) in zip(cols, factors):
-        with col:
-            _compact_card(label, factor.level, factor.level, len(factor.evidence_labels))
-            with st.expander("근거"):
-                st.caption(factor.rationale)
-                if factor.evidence_labels:
-                    st.caption(" · ".join(factor.evidence_labels))
-
     st.markdown("#### 4-AXIS OPPORTUNITY CONTEXT")
     context = result.context
     structure_value = " · ".join(item.claim for item in context.business_structure[:2]) or "Unknown"
@@ -129,19 +131,20 @@ def render_page_1_opportunity(result: BDV2AnalysisResult) -> None:
     _stage_progress(context.business_stage.claim)
 
     decision = result.bd_decision
-    if decision:
-        st.markdown(
-            f"<div class='v2-decision'><div class='v2-kicker' style='color:#cbd3ff'>BUSINESS DEVELOPMENT DECISION</div>"
-            f"<h2>{decision.headline}</h2><div>{decision.action_direction}</div></div>",
-            unsafe_allow_html=True,
-        )
-        with st.expander("판단 근거"):
-            st.write(decision.rationale)
-            st.markdown("**Context Basis:** " + " · ".join(decision.context_basis))
-            if decision.evidence_labels:
-                st.caption("Evidence: " + " · ".join(decision.evidence_labels))
+    st.markdown(
+        f"<div class='v2-decision'><div class='v2-kicker' style='color:#cbd3ff'>BUSINESS DEVELOPMENT DECISION</div>"
+        f"<h2>{decision.decision.upper()}</h2><div>{decision.action_direction}</div></div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("최종 판단 근거"):
+        st.write(decision.rationale)
+        st.markdown("**Context Basis:** " + " · ".join(decision.context_basis))
+        if decision.evidence_labels:
+            st.caption("Evidence: " + " · ".join(decision.evidence_labels))
     briefing = result.executive_summary.strip().replace("\n", " ")
     st.markdown(f"<div class='v2-brief'><div class='v2-kicker'>EXECUTIVE BRIEFING</div><b>{briefing[:600]}</b></div>", unsafe_allow_html=True)
+    st.markdown("#### 사업구도 상세")
+    st.caption(result.relationship_map.decision_structure_summary)
     _render_relationship_map(result)
 
 
@@ -189,7 +192,7 @@ def render_page_2_strategy(result: BDV2AnalysisResult) -> None:
                 st.markdown(f"- {gap}")
 
     mode = result.bd_decision.decision if result.bd_decision else "now"
-    if mode in {"now", "needs_confirm"}:
+    if mode == "now":
         st.subheader("Evidence-grounded Workstream Top 3")
         st.caption("임시 Vertical guardrail 후보이며 확정 taxonomy가 아닙니다.")
         if not result.workstreams:
@@ -205,6 +208,10 @@ def render_page_2_strategy(result: BDV2AnalysisResult) -> None:
                         st.caption(capability.rationale)
                         st.caption("Basis: " + " · ".join(capability.context_basis))
                         st.caption("Evidence: " + " · ".join(capability.evidence_labels))
+        if result.excluded_workstreams:
+            with st.expander("제외 Workstream"):
+                for item in result.excluded_workstreams:
+                    st.markdown(f"- **{item.workstream}** · {item.reason}")
     elif mode == "monitor":
         st.subheader("Watch Signal / Next Trigger")
         for signal in intelligence.watch_signals:
@@ -213,6 +220,31 @@ def render_page_2_strategy(result: BDV2AnalysisResult) -> None:
     else:
         st.subheader("Historical Intelligence")
         st.info("Active Pursuit는 중단되었습니다. 참여·발주 구조와 반복 Partner를 다음 기회에 활용합니다.")
+
+    if mode != "closed":
+        st.subheader("Proposal Hypothesis")
+        if mode == "monitor":
+            st.caption("현재 Research 기준의 조건부 가설입니다. Scope·구매경로·Actor 확인 후 구체화해야 합니다.")
+        for item in result.proposal_hypotheses:
+            with st.expander(f"#{item.rank} {item.workstream} · {item.mode.upper()}"):
+                st.markdown(f"**Capability:** {item.capability}")
+                st.write(item.hypothesis)
+                if item.conditions_to_confirm:
+                    st.markdown("**구체화 조건**")
+                    for condition in item.conditions_to_confirm:
+                        st.markdown(f"- {condition}")
+                st.caption("Evidence: " + " · ".join(item.evidence_labels))
+                if item.portfolio_source_url:
+                    st.caption("Portfolio source: " + item.portfolio_source_url)
+
+        st.subheader("유사 BO · Sample Internal Data")
+        st.warning("Synthetic SFDC sample입니다. 외부 Research Evidence 또는 프로젝트 사실로 사용하지 않습니다.")
+        for match in result.sample_sfdc_matches:
+            record = match.record
+            st.markdown(
+                f"- **{record.oppty} · {record.account}** · {record.vertical} · "
+                f"{record.size} · Owner: `{record.owner}` · {match.similarity_reason}"
+            )
 
 
 def _talking(item: TalkingPoint) -> None:
@@ -223,51 +255,71 @@ def _talking(item: TalkingPoint) -> None:
         st.markdown(f"**If Negative / Unknown**  \n{item.next_action_if_negative_or_unknown}")
 
 
+def _render_must_know(result: BDV2AnalysisResult) -> None:
+    st.subheader("Must Know Top 3")
+    for item in result.must_know_top3:
+        with st.expander(f"#{item.rank} {item.question}", expanded=item.rank == 1):
+            st.write(item.why_it_matters)
+            st.caption("Decision impact: " + " · ".join(item.decision_impact))
+            if item.actor_ids:
+                st.caption("Relationship Actor ID: " + " · ".join(item.actor_ids))
+            if item.evidence_labels:
+                st.caption("Evidence: " + " · ".join(item.evidence_labels))
+            st.markdown(f"**확인 방법:** {item.suggested_way_to_check}")
+
+
+def _render_stakeholders(result: BDV2AnalysisResult) -> None:
+    st.subheader("누구를 만나야 하는가")
+    for index, person in enumerate(result.stakeholders, start=1):
+        priority = "HIGH" if person.priority == "primary" else "MEDIUM" if person.priority == "secondary" else "OPTIONAL"
+        organization = person.organization_or_candidate or "UNKNOWN"
+        with st.expander(f"#{index} {person.role} · {organization} · {person.credibility.upper()}", expanded=index == 1):
+            st.caption(f"Relationship Actor ID: {person.actor_id or 'unlinked'} · Priority: {priority}")
+            st.write(person.why_meet)
+            if person.evidence_labels:
+                st.caption("Evidence: " + " · ".join(person.evidence_labels))
+            for value in person.information_to_get:
+                st.markdown(f"- {value}")
+
+
 def render_page_3_meeting(result: BDV2AnalysisResult) -> None:
     inject_v2_css()
     st.markdown("<div class='v2-kicker'>PAGE 3 · MEETING / ACTION</div>", unsafe_allow_html=True)
     mode = result.bd_decision.decision if result.bd_decision else "now"
     if mode == "closed":
-        st.error("CLOSED · 현재 프로젝트의 적극적인 Meeting Plan과 NBA는 생성하지 않습니다.")
-        _intelligence_group("Awarded / Historical Actors", result.project_intelligence.project_ecosystem)
+        st.error("CLOSED · 적극적인 Proposal, Meeting Plan, Must Know를 생성하지 않습니다.")
+        _intelligence_group("누가 수주했는가 / 실제 참여자", result.project_intelligence.project_ecosystem)
+        _intelligence_group("과거 참여자 / 반복 Partner", result.project_intelligence.historical_projects)
+        st.subheader("차기 프로젝트용 Intelligence")
+        for signal in result.project_intelligence.watch_signals:
+            st.markdown(f"- {signal}")
         return
-    st.subheader("Stakeholder Priority")
-    plans = {plan.stakeholder_role: plan for plan in result.stakeholder_meeting_plans}
-    for index, person in enumerate(result.stakeholders, start=1):
-        priority = "HIGH PRIORITY" if index == 1 or person.priority == "primary" else "MEDIUM" if person.priority == "secondary" else "OPTIONAL"
-        with st.expander(f"#{index} {person.role} · {priority}", expanded=index == 1):
-            st.write(person.why_meet)
-            if person.organization_or_candidate:
-                st.markdown(f"**Organization / Candidate:** {person.organization_or_candidate}")
-            st.caption(f"{person.credibility} · {person.rationale}")
-            if person.evidence_labels:
-                st.caption("Evidence: " + " · ".join(person.evidence_labels))
-            for value in person.information_to_get:
-                st.markdown(f"- {value}")
-            plan = plans.get(person.role)
-            if plan:
-                for title, items in (("OPEN", plan.open), ("POWER", plan.power), ("WIN", plan.win)):
-                    if items:
-                        st.markdown(f"**{title}**")
-                        for item in items:
-                            st.markdown(f"- {item.question}")
     if mode == "monitor":
-        st.subheader("Trigger Confirmation Plan")
+        st.subheader("지금 확인해야 할 것")
+        _render_stakeholders(result)
+        _render_must_know(result)
+        st.subheader("NOW 전환 Trigger")
         for signal in result.project_intelligence.watch_signals:
             st.markdown(f"- 확인: {signal}")
         st.info(f"NEXT TRIGGER · {result.project_intelligence.next_trigger or '확인 필요'}")
+        st.subheader("이렇게 제안해 보세요")
+        for item in result.proposal_hypotheses:
+            st.markdown(f"- **{item.workstream}** · {item.hypothesis}")
         return
+    st.subheader("지금 해야 할 일")
+    for item in result.next_best_actions:
+        st.markdown(f"- **{item.action}** → {item.target} · 완료기준: {item.done_criteria}")
+    _render_stakeholders(result)
+    _render_must_know(result)
+    st.subheader("무엇을 준비해야 하는가")
+    for item in result.proposal_hypotheses:
+        st.markdown(f"- **{item.workstream} / {item.capability}** · {item.hypothesis}")
+    st.subheader("이렇게 제안해 보세요")
     st.subheader("Research-grounded Talking Points")
     for title, items in (("OPEN", result.talking_points.open), ("POWER", result.talking_points.power), ("WIN", result.talking_points.win)):
         st.markdown(f"#### {title}")
         for item in items:
             _talking(item)
-    st.subheader("Next Best Action")
-    for item in result.next_best_actions:
-        with st.expander(f"{item.priority.upper()} · {item.action}", expanded=item.priority == "now"):
-            st.markdown(f"**Target:** {item.target}")
-            st.markdown(f"**Purpose:** {item.purpose}")
-            st.markdown(f"**Done Criteria:** {item.done_criteria}")
 
 
 def render_research_trace(trace: dict) -> None:

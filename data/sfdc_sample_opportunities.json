@@ -1,0 +1,360 @@
+{
+  "metadata": {
+    "label": "Sample Internal Data",
+    "synthetic": true,
+    "external_research_evidence": false,
+    "schema_version": "1.0"
+  },
+  "records": [
+    {
+      "oppty": "OSP2025000001",
+      "account": "Hyundai",
+      "vertical": "Smart Factory",
+      "size": "$1M",
+      "owner": "Nguyen.tak"
+    },
+    {
+      "oppty": "OSP2025000002",
+      "account": "VinFast",
+      "vertical": "Facility Energy",
+      "size": "$2M",
+      "owner": "Tran.minh"
+    },
+    {
+      "oppty": "OSP2025000003",
+      "account": "Samsung SDI",
+      "vertical": "Enterprise Mobility",
+      "size": "$3M",
+      "owner": "Le.anh"
+    },
+    {
+      "oppty": "OSP2025000004",
+      "account": "LG Energy Solution",
+      "vertical": "HVAC",
+      "size": "$5M",
+      "owner": "Park.jiho"
+    },
+    {
+      "oppty": "OSP2025000005",
+      "account": "Foxconn",
+      "vertical": "Digital Workplace",
+      "size": "$8M",
+      "owner": "Kim.seojun"
+    },
+    {
+      "oppty": "OSP2025000006",
+      "account": "Amkor",
+      "vertical": "Operational Visualization",
+      "size": "$10M",
+      "owner": "Pham.linh"
+    },
+    {
+      "oppty": "OSP2025000007",
+      "account": "Intel",
+      "vertical": "Connected Facility",
+      "size": "$1M",
+      "owner": "Choi.yuna"
+    },
+    {
+      "oppty": "OSP2025000008",
+      "account": "Bosch",
+      "vertical": "Factory Expansion",
+      "size": "$2M",
+      "owner": "Hoang.nam"
+    },
+    {
+      "oppty": "OSP2025000009",
+      "account": "Panasonic",
+      "vertical": "Smart Factory",
+      "size": "$3M",
+      "owner": "Lee.joon"
+    },
+    {
+      "oppty": "OSP2025000010",
+      "account": "Toyota",
+      "vertical": "Facility Energy",
+      "size": "$5M",
+      "owner": "Doan.ha"
+    },
+    {
+      "oppty": "OSP2025000011",
+      "account": "Honda",
+      "vertical": "Enterprise Mobility",
+      "size": "$8M",
+      "owner": "Nguyen.tak"
+    },
+    {
+      "oppty": "OSP2025000012",
+      "account": "Lego",
+      "vertical": "HVAC",
+      "size": "$10M",
+      "owner": "Tran.minh"
+    },
+    {
+      "oppty": "OSP2025000013",
+      "account": "Heineken",
+      "vertical": "Digital Workplace",
+      "size": "$1M",
+      "owner": "Le.anh"
+    },
+    {
+      "oppty": "OSP2025000014",
+      "account": "Nestle",
+      "vertical": "Operational Visualization",
+      "size": "$2M",
+      "owner": "Park.jiho"
+    },
+    {
+      "oppty": "OSP2025000015",
+      "account": "Unilever",
+      "vertical": "Connected Facility",
+      "size": "$3M",
+      "owner": "Kim.seojun"
+    },
+    {
+      "oppty": "OSP2025000016",
+      "account": "P&G",
+      "vertical": "Factory Expansion",
+      "size": "$5M",
+      "owner": "Pham.linh"
+    },
+    {
+      "oppty": "OSP2025000017",
+      "account": "Canon",
+      "vertical": "Smart Factory",
+      "size": "$8M",
+      "owner": "Choi.yuna"
+    },
+    {
+      "oppty": "OSP2025000018",
+      "account": "Goertek",
+      "vertical": "Facility Energy",
+      "size": "$10M",
+      "owner": "Hoang.nam"
+    },
+    {
+      "oppty": "OSP2025000019",
+      "account": "Pegatron",
+      "vertical": "Enterprise Mobility",
+      "size": "$1M",
+      "owner": "Lee.joon"
+    },
+    {
+      "oppty": "OSP2025000020",
+      "account": "Luxshare",
+      "vertical": "HVAC",
+      "size": "$2M",
+      "owner": "Doan.ha"
+    },
+    {
+      "oppty": "OSP2025000021",
+      "account": "THACO",
+      "vertical": "Digital Workplace",
+      "size": "$3M",
+      "owner": "Nguyen.tak"
+    },
+    {
+      "oppty": "OSP2025000022",
+      "account": "Masan",
+      "vertical": "Operational Visualization",
+      "size": "$5M",
+      "owner": "Tran.minh"
+    },
+    {
+      "oppty": "OSP2025000023",
+      "account": "Hoa Phat",
+      "vertical": "Connected Facility",
+      "size": "$8M",
+      "owner": "Le.anh"
+    },
+    {
+      "oppty": "OSP2025000024",
+      "account": "Vingroup",
+      "vertical": "Factory Expansion",
+      "size": "$10M",
+      "owner": "Park.jiho"
+    },
+    {
+      "oppty": "OSP2025000025",
+      "account": "BYD",
+      "vertical": "Smart Factory",
+      "size": "$1M",
+      "owner": "Kim.seojun"
+    },
+    {
+      "oppty": "OSP2025000026",
+      "account": "Hyundai",
+      "vertical": "Facility Energy",
+      "size": "$2M",
+      "owner": "Pham.linh"
+    },
+    {
+      "oppty": "OSP2025000027",
+      "account": "VinFast",
+      "vertical": "Enterprise Mobility",
+      "size": "$3M",
+      "owner": "Choi.yuna"
+    },
+    {
+      "oppty": "OSP2025000028",
+      "account": "Samsung SDI",
+      "vertical": "HVAC",
+      "size": "$5M",
+      "owner": "Hoang.nam"
+    },
+    {
+      "oppty": "OSP2025000029",
+      "account": "LG Energy Solution",
+      "vertical": "Digital Workplace",
+      "size": "$8M",
+      "owner": "Lee.joon"
+    },
+    {
+      "oppty": "OSP2025000030",
+      "account": "Foxconn",
+      "vertical": "Operational Visualization",
+      "size": "$10M",
+      "owner": "Doan.ha"
+    },
+    {
+      "oppty": "OSP2025000031",
+      "account": "Amkor",
+      "vertical": "Connected Facility",
+      "size": "$1M",
+      "owner": "Nguyen.tak"
+    },
+    {
+      "oppty": "OSP2025000032",
+      "account": "Intel",
+      "vertical": "Factory Expansion",
+      "size": "$2M",
+      "owner": "Tran.minh"
+    },
+    {
+      "oppty": "OSP2025000033",
+      "account": "Bosch",
+      "vertical": "Smart Factory",
+      "size": "$3M",
+      "owner": "Le.anh"
+    },
+    {
+      "oppty": "OSP2025000034",
+      "account": "Panasonic",
+      "vertical": "Facility Energy",
+      "size": "$5M",
+      "owner": "Park.jiho"
+    },
+    {
+      "oppty": "OSP2025000035",
+      "account": "Toyota",
+      "vertical": "Enterprise Mobility",
+      "size": "$8M",
+      "owner": "Kim.seojun"
+    },
+    {
+      "oppty": "OSP2025000036",
+      "account": "Honda",
+      "vertical": "HVAC",
+      "size": "$10M",
+      "owner": "Pham.linh"
+    },
+    {
+      "oppty": "OSP2025000037",
+      "account": "Lego",
+      "vertical": "Digital Workplace",
+      "size": "$1M",
+      "owner": "Choi.yuna"
+    },
+    {
+      "oppty": "OSP2025000038",
+      "account": "Heineken",
+      "vertical": "Operational Visualization",
+      "size": "$2M",
+      "owner": "Hoang.nam"
+    },
+    {
+      "oppty": "OSP2025000039",
+      "account": "Nestle",
+      "vertical": "Connected Facility",
+      "size": "$3M",
+      "owner": "Lee.joon"
+    },
+    {
+      "oppty": "OSP2025000040",
+      "account": "Unilever",
+      "vertical": "Factory Expansion",
+      "size": "$5M",
+      "owner": "Doan.ha"
+    },
+    {
+      "oppty": "OSP2025000041",
+      "account": "P&G",
+      "vertical": "Smart Factory",
+      "size": "$8M",
+      "owner": "Nguyen.tak"
+    },
+    {
+      "oppty": "OSP2025000042",
+      "account": "Canon",
+      "vertical": "Facility Energy",
+      "size": "$10M",
+      "owner": "Tran.minh"
+    },
+    {
+      "oppty": "OSP2025000043",
+      "account": "Goertek",
+      "vertical": "Enterprise Mobility",
+      "size": "$1M",
+      "owner": "Le.anh"
+    },
+    {
+      "oppty": "OSP2025000044",
+      "account": "Pegatron",
+      "vertical": "HVAC",
+      "size": "$2M",
+      "owner": "Park.jiho"
+    },
+    {
+      "oppty": "OSP2025000045",
+      "account": "Luxshare",
+      "vertical": "Digital Workplace",
+      "size": "$3M",
+      "owner": "Kim.seojun"
+    },
+    {
+      "oppty": "OSP2025000046",
+      "account": "THACO",
+      "vertical": "Operational Visualization",
+      "size": "$5M",
+      "owner": "Pham.linh"
+    },
+    {
+      "oppty": "OSP2025000047",
+      "account": "Masan",
+      "vertical": "Connected Facility",
+      "size": "$8M",
+      "owner": "Choi.yuna"
+    },
+    {
+      "oppty": "OSP2025000048",
+      "account": "Hoa Phat",
+      "vertical": "Factory Expansion",
+      "size": "$10M",
+      "owner": "Hoang.nam"
+    },
+    {
+      "oppty": "OSP2025000049",
+      "account": "Vingroup",
+      "vertical": "Smart Factory",
+      "size": "$1M",
+      "owner": "Lee.joon"
+    },
+    {
+      "oppty": "OSP2025000050",
+      "account": "BYD",
+      "vertical": "Facility Energy",
+      "size": "$2M",
+      "owner": "Doan.ha"
+    }
+  ]
+}

@@ -452,6 +452,39 @@ def quick_research_to_rule_text(
     return "\n".join(sections)
 
 
+def _attach_context_provenance(context, quick: QuickResearchResult):
+    """Attach source metadata to the four final context axes after arbitration."""
+
+    def enrich(item, evidence_group: list[ResearchEvidence]):
+        labels = list(dict.fromkeys(
+            value for evidence in evidence_group
+            for value in (evidence.source_name, *(source.name for source in evidence.sources)) if value
+        ))
+        urls = list(dict.fromkeys(
+            value for evidence in evidence_group
+            for value in (evidence.source_url, *(source.url for source in evidence.sources)) if value
+        ))
+        dates = list(dict.fromkeys(
+            source.published_date for evidence in evidence_group for source in evidence.sources if source.published_date
+        ))
+        conflicts = list(dict.fromkeys(
+            evidence.claim for evidence in evidence_group if any(source.stance == "contradicts" for source in evidence.sources)
+        ))
+        return item.model_copy(update={
+            "source_labels": list(dict.fromkeys(item.source_labels + labels))[:10],
+            "source_urls": urls[:10],
+            "source_dates": dates[:10],
+            "source_conflicts": conflicts[:5],
+        })
+
+    return context.model_copy(update={
+        "business_stage": enrich(context.business_stage, quick.stage_signals),
+        "building_type": enrich(context.building_type, quick.building_type_signals),
+        "customer_needs": [enrich(item, quick.customer_need_signals) for item in context.customer_needs],
+        "business_structure": [enrich(item, quick.business_structure_signals) for item in context.business_structure],
+    })
+
+
 # =========================================================
 # 5. Deep Research
 # =========================================================
@@ -1033,6 +1066,7 @@ def research_opportunity(
         rule_result=rule_result,
         ai_result=ai_context,
     )
+    final_context = _attach_context_provenance(final_context, quick)
 
     # Rule + AI를 반영한 최종 Context
     rule_result.context = final_context

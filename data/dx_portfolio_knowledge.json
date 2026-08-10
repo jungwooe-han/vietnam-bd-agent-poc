@@ -1,0 +1,128 @@
+{
+  "version": "0.1-draft",
+  "scope": "Vietnam manufacturing BD POC",
+  "design_principle": "Official Samsung Business facts are separated from BD interpretation metadata.",
+  "portfolio": [
+    {
+      "id": "smartthings_pro",
+      "official": {
+        "name": "SmartThings Pro",
+        "category": "B2B IoT / Building & Device Management",
+        "summary": "Integrated B2B IoT solution for remote management, automation, energy analysis and connected device/building operation.",
+        "source_url": "https://www.samsung.com/sec/business/smartthingspro/"
+      },
+      "bd_intelligence": {
+        "dx_relevant_needs": ["energy saving", "facility operation efficiency", "remote monitoring and control", "multi-site/device management", "connected workplace safety"],
+        "applicable_scopes": ["HVAC", "building/device control", "energy monitoring", "IoT integration", "connected devices"],
+        "relevant_building_types": ["new factory", "factory expansion", "existing factory retrofit", "office/support building"],
+        "relevant_project_stages": ["concept", "basic design", "detailed design", "procurement", "operation/retrofit"],
+        "typical_buyers_influencers": ["Owner Facility", "Owner IT/DX", "MEP", "EPC", "GC"],
+        "typical_buying_routes": ["Owner direct", "EPC/MEP package", "system integrator/partner"],
+        "must_know_candidates": ["Is building/device control scope already specified?", "Who owns the HVAC/IoT/energy-management specification?", "Is the relevant package owner-direct or included in EPC/MEP scope?", "Is there an incumbent BMS/IoT platform?"],
+        "workstream_candidates": ["Facility Energy Optimization", "Connected Facility Operations"]
+      }
+    },
+    {
+      "id": "biot",
+      "official": {
+        "name": "b.IoT",
+        "category": "Building Integrated Management / HVAC IoT",
+        "summary": "Building/factory-oriented integrated operation solution for major facilities and systems, including central HVAC use cases.",
+        "source_url": "https://www.samsung.com/sec/business/b-iot-solutions/b-iot-cloud/"
+      },
+      "bd_intelligence": {
+        "dx_relevant_needs": ["central HVAC optimization", "energy saving", "facility integrated monitoring", "maintenance efficiency", "indoor environment management"],
+        "applicable_scopes": ["central HVAC", "BMS", "facility control", "energy management", "mechanical equipment monitoring"],
+        "relevant_building_types": ["large factory", "new factory", "factory expansion", "existing factory retrofit"],
+        "relevant_project_stages": ["concept", "basic design", "detailed design", "procurement", "operation/retrofit"],
+        "typical_buyers_influencers": ["Owner Facility", "MEP", "EPC", "GC", "facility operator"],
+        "typical_buying_routes": ["Owner direct", "MEP package", "EPC package", "HVAC/system integration partner"],
+        "must_know_candidates": ["Who controls the BMS/HVAC specification?", "Has the central HVAC/BMS package already been awarded?", "Which BMS or control platform is incumbent?", "Is energy optimization part of the project KPI/specification?"],
+        "workstream_candidates": ["Facility Energy Optimization", "Integrated Building Operations"]
+      }
+    },
+    {
+      "id": "hvac",
+      "official": {
+        "name": "System Air Conditioner / Central HVAC",
+        "category": "HVAC",
+        "summary": "Samsung Business HVAC portfolio relevant to commercial and facility cooling/heating environments.",
+        "source_url": "https://www.samsung.com/sec/business/"
+      },
+      "bd_intelligence": {
+        "dx_relevant_needs": ["cooling/heating", "energy efficiency", "facility expansion", "temperature/environment control"],
+        "applicable_scopes": ["HVAC", "central plant", "office/support area cooling", "facility mechanical package"],
+        "relevant_building_types": ["new factory", "factory expansion", "existing factory retrofit", "office/support building"],
+        "relevant_project_stages": ["basic design", "detailed design", "procurement", "construction", "retrofit"],
+        "typical_buyers_influencers": ["Owner Facility", "Architect/MEP Consultant", "MEP", "EPC", "GC"],
+        "typical_buying_routes": ["Owner direct", "EPC package", "MEP subcontract/package", "HVAC dealer/partner"],
+        "must_know_candidates": ["Has HVAC specification been frozen?", "Who owns HVAC design/specification approval?", "Has the HVAC package been tendered or awarded?", "Is procurement owner-direct, EPC-led, or MEP-led?"],
+        "workstream_candidates": ["Facility HVAC", "Facility Energy Optimization"]
+      }
+    },
+    {
+      "id": "knox_mobile",
+      "official": {
+        "name": "Samsung Knox + Galaxy Mobile/Tablet",
+        "category": "Enterprise Mobility / Device Security & Management",
+        "summary": "Samsung Knox provides enterprise device security, configuration and management capabilities for Samsung mobile devices.",
+        "source_url": "https://www.samsung.com/sec/business/mobile-solutions/knox-solutions/"
+      },
+      "bd_intelligence": {
+        "dx_relevant_needs": ["enterprise mobile security", "field device management", "device deployment/configuration", "connected workforce", "secure mobile operations"],
+        "applicable_scopes": ["field workforce devices", "enterprise mobility", "device security", "device lifecycle/management"],
+        "relevant_building_types": ["new factory", "existing factory", "logistics/warehouse", "multi-site operations"],
+        "relevant_project_stages": ["planning", "procurement", "operation/expansion"],
+        "typical_buyers_influencers": ["Owner IT", "Information Security", "Operations", "Procurement"],
+        "typical_buying_routes": ["Owner direct", "IT reseller/partner", "enterprise mobility project"],
+        "must_know_candidates": ["What field-device use cases are in scope?", "Who owns enterprise mobility/security policy?", "Is an MDM/EMM incumbent already selected?", "What device deployment volume and timing are planned?"],
+        "workstream_candidates": ["Connected Workforce", "Secure Enterprise Mobility"]
+      }
+    },
+    {
+      "id": "signage_vxt",
+      "official": {
+        "name": "Samsung Signage + VXT CMS",
+        "category": "Business Display / Content Management",
+        "summary": "Business display portfolio with VXT content creation and management capabilities.",
+        "source_url": "https://www.samsung.com/sec/business/"
+      },
+      "bd_intelligence": {
+        "dx_relevant_needs": ["operational communication", "digital information display", "control-room/office visualization", "multi-site content management"],
+        "applicable_scopes": ["lobby/office signage", "production information display", "control room", "training/safety communication"],
+        "relevant_building_types": ["new factory", "factory expansion", "existing factory retrofit", "office/support building"],
+        "relevant_project_stages": ["detailed design", "procurement", "fit-out", "operation/retrofit"],
+        "typical_buyers_influencers": ["Owner IT", "Owner Operations", "General Affairs", "GC", "AV/SI partner"],
+        "typical_buying_routes": ["Owner direct", "GC fit-out package", "AV/SI partner"],
+        "must_know_candidates": ["Which spaces require business displays?", "Who owns display/content-management scope?", "Has the AV/signage package been awarded?", "Is centralized content/device management required?"],
+        "workstream_candidates": ["Digital Workplace & Communication", "Operational Visualization"]
+      }
+    },
+    {
+      "id": "pc_monitor",
+      "official": {
+        "name": "Business PC / Monitor",
+        "category": "Enterprise IT Devices",
+        "summary": "Samsung Business PC and monitor portfolio for enterprise workplace environments.",
+        "source_url": "https://www.samsung.com/sec/business/"
+      },
+      "bd_intelligence": {
+        "dx_relevant_needs": ["office/workplace setup", "employee device deployment", "engineering/operations workspace", "standardized endpoint environment"],
+        "applicable_scopes": ["office IT", "engineering workspace", "control/operation desk", "employee endpoint rollout"],
+        "relevant_building_types": ["new factory", "factory expansion", "office/support building"],
+        "relevant_project_stages": ["procurement", "fit-out", "operation/expansion"],
+        "typical_buyers_influencers": ["Owner IT", "Procurement", "General Affairs"],
+        "typical_buying_routes": ["Owner direct", "IT reseller/partner", "workplace fit-out package"],
+        "must_know_candidates": ["What endpoint/device scope is included in the project?", "Who owns workplace IT procurement?", "Is a standard device vendor already selected?", "What is the rollout volume and schedule?"],
+        "workstream_candidates": ["Digital Workplace"]
+      }
+    }
+  ],
+  "agent_usage_rules": {
+    "purpose": "Use portfolio knowledge to judge DX addressability and generate sales-relevant must-know information; do not treat it as a product recommendation catalog.",
+    "dx_relevance_gate": ["scope", "decision_maker", "buying_route", "workstream", "timing"],
+    "must_know_rule": "Keep a question only when its answer can change DX sales scope, target actor, buying route, workstream, or NOW/MONITOR decision.",
+    "capability_rule": "A capability may be shown only when linked to research evidence plus at least one matching BD metadata field.",
+    "confidence_rule": "BD metadata is an internal hypothesis framework, not an official Samsung claim. Research evidence must determine project-specific applicability."
+  }
+}
