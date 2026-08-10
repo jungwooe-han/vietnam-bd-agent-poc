@@ -4,6 +4,8 @@ import json
 import unittest
 from pathlib import Path
 
+from streamlit.testing.v1 import AppTest
+
 from src.vietnam_bd.dx_portfolio import match_dx_portfolio
 from src.vietnam_bd.models import (
     BDV2Stakeholder,
@@ -144,6 +146,27 @@ class FinalDecisionTest(unittest.TestCase):
 
 
 class RelationshipIntegrityTest(unittest.TestCase):
+    def test_unknown_actor_renders_without_relationship_map_key_error(self) -> None:
+        source = """
+from src.vietnam_bd.demo_data_v2 import demo_v2_result
+from src.vietnam_bd.models import ProjectActor
+from src.vietnam_bd.ui_components_v2 import render_page_1_opportunity
+
+result = demo_v2_result(decision="monitor")
+result.relationship_map.actors.append(ProjectActor(
+    actor_id="unknown_mep",
+    role="MEP",
+    organization="UNKNOWN",
+    temporal_scope="unknown",
+    actor_status="unknown",
+    participation_status="Research did not identify the current organization.",
+    credibility="unknown",
+))
+render_page_1_opportunity(result)
+"""
+        app = AppTest.from_string(source).run(timeout=20)
+        self.assertFalse(app.exception)
+
     def _map(self):
         historical = ResearchEvidence(
             claim="ABC Engineering was EPC on a prior owner project",

@@ -78,8 +78,14 @@ def _render_relationship_map(result: BDV2AnalysisResult) -> None:
         return
     actor_ids = {actor.actor_id for actor in relationship_map.actors}
     lines = ["digraph G {", 'rankdir="LR";', 'graph [bgcolor="transparent", pad="0.2"];', 'node [shape="box", style="rounded,filled", fontname="Arial", fontsize="10"];']
+    actor_colors = {
+        "current": "#dfe6ff",
+        "historical": "#eef0f4",
+        "candidate": "#fff1c7",
+        "unknown": "#f5f5f5",
+    }
     for actor in relationship_map.actors:
-        color = {"current": "#dfe6ff", "historical": "#eef0f4", "candidate": "#fff1c7"}[actor.temporal_scope]
+        color = actor_colors.get(actor.temporal_scope, actor_colors["unknown"])
         label = f"{actor.role}\\n{actor.organization}\\n{actor.actor_status.upper()}".replace('"', "'")
         lines.append(f'"{actor.actor_id}" [label="{label}", fillcolor="{color}"];')
     for edge in relationship_map.relationships:
