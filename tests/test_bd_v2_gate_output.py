@@ -16,6 +16,10 @@ from src.vietnam_bd.models import (
     BusinessDevelopmentDecision,
     MustKnowItem,
     ProposalHypothesis,
+    ProjectActor,
+    ProjectRelationship,
+    IntelligenceItem,
+    BDV2Stakeholder,
 )
 from pydantic import ValidationError
 from src.vietnam_bd.reasoning import (
@@ -207,6 +211,32 @@ class ProposalAndInternalDataTest(unittest.TestCase):
         })
         self.assertEqual(len(must_know.evidence_labels), 8)
         self.assertEqual(len(proposal.evidence_labels), 8)
+
+        actor = ProjectActor.model_validate({
+            "actor_id": "epc", "role": "EPC", "organization": "ABC",
+            "temporal_scope": "current", "participation_status": "current",
+            "credibility": "likely", "evidence_labels": labels,
+            "source_urls": [f"https://example.com/{i}" for i in range(21)],
+            "source_dates": [f"2026-01-{(i % 28) + 1:02d}" for i in range(21)],
+        })
+        relationship = ProjectRelationship.model_validate({
+            "from_actor_id": "owner", "to_actor_id": "epc",
+            "relationship_type": "EPC", "temporal_scope": "current",
+            "credibility": "likely", "evidence_labels": labels,
+        })
+        intelligence = IntelligenceItem.model_validate({
+            "claim": "claim", "credibility": "likely", "evidence_labels": labels,
+            "source_urls": [f"https://example.com/{i}" for i in range(21)],
+        })
+        stakeholder = BDV2Stakeholder.model_validate({
+            "role": "EPC", "priority": "primary", "credibility": "likely",
+            "why_meet": "confirm", "evidence_labels": labels,
+        })
+        self.assertEqual(len(actor.evidence_labels), 8)
+        self.assertEqual(len(actor.source_urls), 8)
+        self.assertEqual(len(relationship.evidence_labels), 8)
+        self.assertEqual(len(intelligence.evidence_labels), 10)
+        self.assertEqual(len(stakeholder.evidence_labels), 6)
 
     def test_long_research_provenance_is_bounded_at_output_models(self) -> None:
         rules = rule("사업기획", "targeting")

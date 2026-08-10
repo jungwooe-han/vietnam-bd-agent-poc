@@ -11,6 +11,12 @@ ResearchDepth = Literal["deep", "limited", "stop"]
 Level = Literal["high", "medium", "low", "unknown"]
 
 
+def _bounded_strings(value: object, limit: int) -> object:
+    if not isinstance(value, list):
+        return value
+    return list(dict.fromkeys(item for item in value if isinstance(item, str) and item))[:limit]
+
+
 class EvidenceItem(BaseModel):
     claim: str
     credibility: Credibility
@@ -148,6 +154,11 @@ class BDV2Stakeholder(BaseModel):
     evidence_labels: list[str] = Field(default_factory=list, max_length=6)
     rationale: str = ""
 
+    @field_validator("evidence_labels", mode="before")
+    @classmethod
+    def bound_evidence_labels(cls, value: object) -> object:
+        return _bounded_strings(value, 6)
+
 
 class TalkingPoint(BaseModel):
     question: str
@@ -203,6 +214,11 @@ class IntelligenceItem(BaseModel):
     source_dates: list[str] = Field(default_factory=list, max_length=10)
     temporal_scope: Literal["current", "historical", "candidate", "unknown"] = "unknown"
 
+    @field_validator("evidence_labels", "source_urls", "source_dates", mode="before")
+    @classmethod
+    def bound_provenance(cls, value: object) -> object:
+        return _bounded_strings(value, 10)
+
 
 class ProjectActor(BaseModel):
     actor_id: str
@@ -218,6 +234,11 @@ class ProjectActor(BaseModel):
     source_dates: list[str] = Field(default_factory=list, max_length=8)
     confirmation_needed: str = ""
 
+    @field_validator("evidence_labels", "source_urls", "source_dates", mode="before")
+    @classmethod
+    def bound_provenance(cls, value: object) -> object:
+        return _bounded_strings(value, 8)
+
 
 class ProjectRelationship(BaseModel):
     from_actor_id: str
@@ -229,6 +250,11 @@ class ProjectRelationship(BaseModel):
     evidence_labels: list[str] = Field(default_factory=list, max_length=8)
     source_urls: list[str] = Field(default_factory=list, max_length=8)
     source_dates: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("evidence_labels", "source_urls", "source_dates", mode="before")
+    @classmethod
+    def bound_provenance(cls, value: object) -> object:
+        return _bounded_strings(value, 8)
 
 
 class RelationshipDecisionMap(BaseModel):
@@ -292,9 +318,7 @@ class MustKnowItem(BaseModel):
     @field_validator("evidence_labels", mode="before")
     @classmethod
     def bound_evidence_labels(cls, value: object) -> object:
-        if not isinstance(value, list):
-            return value
-        return list(dict.fromkeys(label for label in value if isinstance(label, str) and label))[:8]
+        return _bounded_strings(value, 8)
 
 
 class ProposalHypothesis(BaseModel):
@@ -310,9 +334,7 @@ class ProposalHypothesis(BaseModel):
     @field_validator("evidence_labels", mode="before")
     @classmethod
     def bound_evidence_labels(cls, value: object) -> object:
-        if not isinstance(value, list):
-            return value
-        return list(dict.fromkeys(label for label in value if isinstance(label, str) and label))[:8]
+        return _bounded_strings(value, 8)
 
 
 class SFDCOpportunity(BaseModel):
