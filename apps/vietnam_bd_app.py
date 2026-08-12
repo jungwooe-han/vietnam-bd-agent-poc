@@ -133,11 +133,8 @@ def render():
                 placeholder="뉴스 URL 또는 기사 내용을 입력하세요",
                 label_visibility="collapsed",
             )
-            source_col, upload_col, action_col = st.columns([4.5, 1.5, 1.7], vertical_alignment="center")
-            source_col.markdown(
-                '<div class="bd-entry-modes"><span class="active">URL</span><span>Text</span></div>',
-                unsafe_allow_html=True,
-            )
+            spacer_col, upload_col, action_col = st.columns([4.5, 1.5, 1.7], vertical_alignment="center")
+            spacer_col.empty()
             with upload_col.popover("＋ PDF 첨부", use_container_width=True):
                 uploaded = st.file_uploader(
                     "PDF/TXT/MD 파일",
