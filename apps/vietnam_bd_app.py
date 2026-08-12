@@ -59,19 +59,30 @@ def render():
     if st.session_state.bd_engine == "BD v3" or st.session_state.bd_result_version == "v3":
         inject_v3_css()
 
-    st.markdown(
-        "<div class='hero'><h1>Vietnam Manufacturing BD Agent</h1>"
-        "<p>아는 정보나 뉴스를 넣으면, 사업기회 관점으로 확장하고 첫 미팅에서 무엇을 알아와야 할지 안내합니다.</p></div>",
-        unsafe_allow_html=True,
-    )
+    if st.session_state.bd_stage != "input":
+        st.markdown(
+            "<div class='hero'><h1>Vietnam Manufacturing BD Agent</h1>"
+            "<p>아는 정보나 뉴스를 넣으면, 사업기회 관점으로 확장하고 첫 미팅에서 무엇을 알아와야 할지 안내합니다.</p></div>",
+            unsafe_allow_html=True,
+        )
 
     with st.sidebar:
-        st.markdown("### 설정")
-        engine = st.radio("분석 엔진", ["BD v3", "BD v2", "기존 BD"], key="bd_engine")
-        demo_mode = st.checkbox("데모 모드", value=not bool(os.getenv("OPENAI_API_KEY")))
-        st.caption("데모 모드는 API 호출 없이 예시 결과를 표시합니다.")
-        closed_demo = st.checkbox("Closed 데모", value=False) if engine in {"BD v2", "BD v3"} and demo_mode else False
-        developer_mode = st.checkbox("개발 모드 · Research Trace", value=False) if engine in {"BD v2", "BD v3"} else False
+        if st.button("＋ 새 분석", use_container_width=True):
+            for key in (
+                "bd_stage",
+                "bd_result",
+                "bd_seed",
+                "bd_questions",
+                "bd_uploaded_bytes",
+                "bd_uploaded_name",
+                "bd_handoff_company",
+                "bd_result_version",
+                "bd_v2_research_trace",
+                "bd_history_id",
+            ):
+                st.session_state.pop(key, None)
+            st.rerun()
+
         with st.expander("저장된 분석 이력", expanded=False):
             history_items = list_analyses()
             if not history_items:
@@ -93,36 +104,55 @@ def render():
                         st.session_state.bd_stage = "result"
                         st.rerun()
 
-        if st.button("새 Opportunity"):
-            for key in (
-                "bd_stage",
-                "bd_result",
-                "bd_seed",
-                "bd_questions",
-                "bd_uploaded_bytes",
-                "bd_uploaded_name",
-                "bd_handoff_company",
-                "bd_result_version",
-                "bd_v2_research_trace",
-                "bd_history_id",
-            ):
-                st.session_state.pop(key, None)
-            st.rerun()
+        with st.expander("고급 설정", expanded=False):
+            engine = st.radio("분석 엔진", ["BD v3", "BD v2", "기존 BD"], key="bd_engine")
+            demo_mode = st.checkbox("데모 모드", value=not bool(os.getenv("OPENAI_API_KEY")))
+            st.caption("데모 모드는 API 호출 없이 예시 결과를 표시합니다.")
+            closed_demo = st.checkbox("Closed 데모", value=False) if engine in {"BD v2", "BD v3"} and demo_mode else False
+            developer_mode = st.checkbox("개발 모드 · Research Trace", value=False) if engine in {"BD v2", "BD v3"} else False
 
     if st.session_state.bd_stage == "input":
+        st.markdown(
+            """
+            <section class="bd-entry-hero">
+              <div class="bd-entry-eyebrow">VIETNAM MANUFACTURING · BD INTELLIGENCE</div>
+              <h1>Find the opportunity<br>behind the news.</h1>
+              <p>뉴스에서 사업기회를 발견하고, Samsung DX 관점의 다음 영업 행동까지 연결합니다.</p>
+            </section>
+            """,
+            unsafe_allow_html=True,
+        )
         if st.session_state.get("bd_handoff_company"):
             st.info(f"📡 리드 센싱에서 전달된 기업: {st.session_state.bd_handoff_company} — 아래 내용을 확인하고 필요하면 보완하세요.")
 
-        seed = st.text_area(
-            "니가 아는 정보를 입력해",
-            value=st.session_state.bd_seed,
-            height=230,
-            placeholder="뉴스 전문, URL, 고객에게 들은 내용, 프로젝트 메모를 자유롭게 붙여넣으세요.\n예: 삼성전기가 베트남에서 MLCC 관련 생산라인 투자를 검토 중이다...",
-        )
-        uploaded = st.file_uploader("또는 PDF/TXT 첨부", type=["pdf", "txt", "md"])
-        st.caption("POC에는 실제 회사 기밀정보를 입력하지 마세요. 더미·가명 데이터만 사용합니다.")
+        with st.container(key="bd_entry_composer"):
+            seed = st.text_area(
+                "분석할 뉴스",
+                value=st.session_state.bd_seed,
+                height=150,
+                placeholder="뉴스 URL 또는 기사 내용을 입력하세요",
+                label_visibility="collapsed",
+            )
+            source_col, upload_col, action_col = st.columns([4.5, 1.5, 1.7], vertical_alignment="center")
+            source_col.markdown(
+                '<div class="bd-entry-modes"><span class="active">URL</span><span>Text</span></div>',
+                unsafe_allow_html=True,
+            )
+            with upload_col.popover("＋ PDF 첨부", use_container_width=True):
+                uploaded = st.file_uploader(
+                    "PDF/TXT/MD 파일",
+                    type=["pdf", "txt", "md"],
+                    label_visibility="collapsed",
+                )
+            analyze_clicked = action_col.button("Analyze →", type="primary", use_container_width=True)
 
-        if st.button("사업기회 분석 시작", type="primary", use_container_width=True):
+        st.markdown(
+            '<div class="bd-entry-outcomes">사업단계 · 미팅 전략 · 토킹 포인트 · 확인 필요사항</div>'
+            '<div class="bd-entry-privacy">공개 정보 또는 가명 데이터를 사용하세요. 실제 회사 기밀정보는 입력하지 마세요.</div>',
+            unsafe_allow_html=True,
+        )
+
+        if analyze_clicked:
             if not seed.strip() and uploaded is None:
                 st.warning("텍스트, URL 또는 파일 중 하나를 입력하세요.")
             else:
