@@ -153,15 +153,63 @@ def _evidence_items(bundle: ResearchBundle) -> list[EvidenceItem]:
 
 
 def _payload(bundle: ResearchBundle, rule_result: RuleEngineResult, seed: str) -> dict[str, Any]:
+    def compact_evidence(items: list[ResearchEvidence], limit: int = 8) -> list[dict[str, Any]]:
+        return [
+            {
+                "claim": item.claim,
+                "credibility": item.credibility,
+                "source_names": list(dict.fromkeys(
+                    name for name in (item.source_name, *(source.name for source in item.sources)) if name
+                ))[:2],
+                "source_urls": list(dict.fromkeys(
+                    url for url in (item.source_url, *(source.url for source in item.sources)) if url
+                ))[:2],
+                "has_conflict": any(source.stance == "contradicts" for source in item.sources),
+            }
+            for item in items[:limit]
+        ]
+
+    quick = bundle.quick
+    quick_compact = {
+        "company": quick.company,
+        "project_name": quick.project_name,
+        "current_project_summary": quick.current_project_summary,
+        "stage_signals": compact_evidence(quick.stage_signals),
+        "customer_need_signals": compact_evidence(quick.customer_need_signals),
+        "building_type_signals": compact_evidence(quick.building_type_signals),
+        "business_structure_signals": compact_evidence(quick.business_structure_signals),
+        "recent_project_signals": compact_evidence(quick.recent_project_signals),
+    }
+    deep = bundle.deep
+    deep_compact = None if not deep else {
+        "company": deep.company,
+        "project_facts": compact_evidence(deep.project_facts, 10),
+        "historical_projects": compact_evidence(deep.historical_projects, 6),
+        "project_ecosystem": compact_evidence(deep.project_ecosystem, 8),
+        "ecosystem_candidates": compact_evidence(deep.ecosystem_candidates, 6),
+        "peer_benchmarks": compact_evidence(deep.peer_benchmarks, 4),
+        "buying_signals": compact_evidence(deep.buying_signals, 6),
+        "competitor_signals": compact_evidence(deep.competitor_signals, 4),
+        "unresolved_topics": deep.unresolved_topics[:10],
+    }
     return {
         "seed": seed,
-        "quick_research": bundle.quick.model_dump(mode="json"),
-        "detailed_research": bundle.deep.model_dump(mode="json") if bundle.deep else None,
+        "quick_research": quick_compact,
+        "detailed_research": deep_compact,
         "final_context": rule_result.context.model_dump(mode="json"),
         "stage_gate": rule_result.stage_gate.model_dump(mode="json"),
         "active_pursuit": bundle.active_pursuit,
         "historical_intelligence": bundle.historical_intelligence,
-        "research_rounds": [item.model_dump(mode="json") for item in bundle.research_rounds],
+        "research_rounds": [
+            {
+                "round_number": item.round_number,
+                "focus": item.focus,
+                "new_evidence": item.new_evidence[:10],
+                "critical_gaps": [gap.topic for gap in item.research_gaps if gap.critical][:8],
+                "termination_reason": item.termination_reason,
+            }
+            for item in bundle.research_rounds
+        ],
     }
 
 

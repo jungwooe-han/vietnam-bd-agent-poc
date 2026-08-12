@@ -5,7 +5,7 @@ import os
 from typing import Literal
 
 from openai import OpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .models import (
     ContextClassification,
@@ -234,11 +234,40 @@ use "미확정" or credibility="unknown".
     )
 
     raw = response.output_text.strip()
-
     if raw.startswith("```"):
         raw = raw.replace("```json", "").replace("```", "").strip()
 
-    return AIContextInterpretation.model_validate_json(raw)
+    try:
+        return AIContextInterpretation.model_validate_json(raw)
+    except ValidationError as first_error:
+        schema = json.dumps(AIContextInterpretation.model_json_schema(), ensure_ascii=False)
+        try:
+            repair = client.responses.create(
+                model=_get_model(),
+                instructions=(
+                    "Repair the supplied malformed JSON to exactly match the schema. "
+                    "Return valid JSON only. Preserve supported facts and add no new facts."
+                ),
+                input=f"SCHEMA:\n{schema}\n\nMALFORMED CONTENT:\n{raw}\n\nVALIDATION ERROR:\n{first_error}",
+            )
+            repaired = repair.output_text.strip()
+            if repaired.startswith("```"):
+                repaired = repaired.replace("```json", "").replace("```", "").strip()
+            return AIContextInterpretation.model_validate_json(repaired)
+        except Exception:  # noqa: BLE001 - preserve deterministic fallback on any repair failure
+            # AI formatting failure must not abort the deterministic Rule Engine path.
+            unknown = AIContextItem(
+                value="미확정",
+                credibility="unknown",
+                rationale="AI context JSON could not be validated; Rule Engine evidence retained.",
+                evidence=[],
+            )
+            return AIContextInterpretation(
+                customer_needs=[],
+                building_type=unknown,
+                business_stage=unknown.model_copy(deep=True),
+                business_structure=[],
+            )
 
 
 # =========================================================

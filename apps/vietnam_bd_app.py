@@ -7,11 +7,14 @@ import streamlit as st
 
 from src.vietnam_bd.analysis import analyze_opportunity
 from src.vietnam_bd.analysis_v2 import analyze_opportunity_v2
+from src.vietnam_bd.analysis_v3 import analyze_opportunity_v3
 from src.vietnam_bd.demo_data import demo_result
 from src.vietnam_bd.demo_data_v2 import demo_v2_result
 from src.vietnam_bd.guided_questions import generate_guided_questions
+from src.vietnam_bd.history import get_analysis, list_analyses, save_analysis
 from src.vietnam_bd.ingestion import build_extracted_context
 from src.vietnam_bd.internal_cases import load_internal_cases
+from src.vietnam_bd.localization_v3 import ui
 from src.vietnam_bd.ui_components import (
     inject_css,
     render_dx,
@@ -27,6 +30,12 @@ from src.vietnam_bd.ui_components_v2 import (
     render_page_3_meeting,
     render_research_trace,
 )
+from src.vietnam_bd.ui_components_v3 import (
+    inject_v3_css,
+    render_page_1_opportunity_v3,
+    render_page_2_strategy_v3,
+    render_page_3_meeting_v3,
+)
 
 
 def render():
@@ -39,11 +48,16 @@ def render():
     if "bd_seed" not in st.session_state:
         st.session_state.bd_seed = ""
     if "bd_engine" not in st.session_state:
-        st.session_state.bd_engine = "BD v2"
+        st.session_state.bd_engine = "BD v3"
     if "bd_result_version" not in st.session_state:
         st.session_state.bd_result_version = "legacy"
     if "bd_v2_research_trace" not in st.session_state:
         st.session_state.bd_v2_research_trace = {}
+    if "bd_history_id" not in st.session_state:
+        st.session_state.bd_history_id = None
+
+    if st.session_state.bd_engine == "BD v3" or st.session_state.bd_result_version == "v3":
+        inject_v3_css()
 
     st.markdown(
         "<div class='hero'><h1>Vietnam Manufacturing BD Agent</h1>"
@@ -53,11 +67,32 @@ def render():
 
     with st.sidebar:
         st.markdown("### 설정")
-        engine = st.radio("분석 엔진", ["BD v2", "기존 BD"], key="bd_engine")
+        engine = st.radio("분석 엔진", ["BD v3", "BD v2", "기존 BD"], key="bd_engine")
         demo_mode = st.checkbox("데모 모드", value=not bool(os.getenv("OPENAI_API_KEY")))
         st.caption("데모 모드는 API 호출 없이 예시 결과를 표시합니다.")
-        closed_demo = st.checkbox("Closed 데모", value=False) if engine == "BD v2" and demo_mode else False
-        developer_mode = st.checkbox("개발 모드 · Research Trace", value=False) if engine == "BD v2" else False
+        closed_demo = st.checkbox("Closed 데모", value=False) if engine in {"BD v2", "BD v3"} and demo_mode else False
+        developer_mode = st.checkbox("개발 모드 · Research Trace", value=False) if engine in {"BD v2", "BD v3"} else False
+        with st.expander("저장된 분석 이력", expanded=False):
+            history_items = list_analyses()
+            if not history_items:
+                st.caption("아직 저장된 분석이 없습니다.")
+            for item in history_items:
+                created_label = item.created_at.replace("T", " ")[:16]
+                if st.button(
+                    f"{item.title}\n{created_label} · {item.result_version}",
+                    key=f"bd_history_{item.history_id}",
+                    use_container_width=True,
+                ):
+                    saved = get_analysis(item.history_id)
+                    if saved is not None:
+                        st.session_state.bd_seed = saved.seed
+                        st.session_state.bd_result = saved.result
+                        st.session_state.bd_result_version = saved.result_version
+                        st.session_state.bd_v2_research_trace = saved.research_trace
+                        st.session_state.bd_history_id = saved.history_id
+                        st.session_state.bd_stage = "result"
+                        st.rerun()
+
         if st.button("새 Opportunity"):
             for key in (
                 "bd_stage",
@@ -69,6 +104,7 @@ def render():
                 "bd_handoff_company",
                 "bd_result_version",
                 "bd_v2_research_trace",
+                "bd_history_id",
             ):
                 st.session_state.pop(key, None)
             st.rerun()
@@ -127,8 +163,8 @@ def render():
             guided = "\n\n".join(answers)
             internal = load_internal_cases()
 
-            if engine == "BD v2":
-                status = st.status("BD v2 분석을 시작합니다.", expanded=True)
+            if engine in {"BD v2", "BD v3"}:
+                status = st.status(f"{engine} 분석을 시작합니다.", expanded=True)
 
                 def progress(event: str, details: dict) -> None:
                     if event == "seed_understanding":
@@ -160,33 +196,46 @@ def render():
                     elif event == "sales_reasoning":
                         status.write("영업 분석 생성 중")
                     elif event == "complete":
-                        status.update(label="BD v2 상세 분석 완료", state="complete", expanded=False)
+                        status.update(label=f"{engine} 상세 분석 완료", state="complete", expanded=False)
 
                 try:
-                    result = (
-                        demo_v2_result(closed=closed_demo)
-                        if demo_mode
-                        else analyze_opportunity_v2(
+                    base_result = demo_v2_result(closed=closed_demo) if demo_mode else None
+                    if engine == "BD v3":
+                        from src.vietnam_bd.v3_rule_engine import build_v3_result
+                        result = build_v3_result(base_result, st.session_state.bd_seed, extracted + "\n" + guided) if demo_mode else analyze_opportunity_v3(
                             st.session_state.bd_seed,
                             extracted=extracted,
                             user_context=guided,
                             progress_callback=progress,
                             trace_callback=lambda trace: st.session_state.update(bd_v2_research_trace=trace),
                         )
-                    )
+                    else:
+                        result = base_result if demo_mode else analyze_opportunity_v2(
+                            st.session_state.bd_seed,
+                            extracted=extracted,
+                            user_context=guided,
+                            progress_callback=progress,
+                            trace_callback=lambda trace: st.session_state.update(bd_v2_research_trace=trace),
+                        )
                     if demo_mode:
                         status.write("Mock v2 전체 결과 생성 완료")
-                        status.update(label="BD v2 데모 분석 완료", state="complete", expanded=False)
+                        status.update(label=f"{engine} 데모 분석 완료", state="complete", expanded=False)
                     if notes:
                         result.source_summary.extend(notes)
                     st.session_state.bd_result = result.model_dump()
-                    st.session_state.bd_result_version = "v2"
+                    st.session_state.bd_result_version = "v3" if engine == "BD v3" else "v2"
+                    st.session_state.bd_history_id = save_analysis(
+                        seed=st.session_state.bd_seed,
+                        result_version=st.session_state.bd_result_version,
+                        result=st.session_state.bd_result,
+                        research_trace=st.session_state.bd_v2_research_trace,
+                    )
                     st.session_state.bd_stage = "result"
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
-                    status.update(label="BD v2 분석 실패", state="error", expanded=True)
-                    st.error(f"BD v2 분석에 실패했습니다: {exc}")
-                    st.info("기존 BD 엔진을 선택하거나 데모 모드로 v2 결과 화면을 확인할 수 있습니다.")
+                    status.update(label=f"{engine} 분석 실패", state="error", expanded=True)
+                    st.error(f"{engine} 분석에 실패했습니다: {exc}")
+                    st.info("사이드바에서 BD v2 또는 기존 BD 엔진으로 언제든 전환할 수 있습니다.")
             else:
                 try:
                     with st.spinner("기존 BD 분석을 실행 중..."):
@@ -199,6 +248,11 @@ def render():
                         result.source_summary.extend(notes)
                     st.session_state.bd_result = result.model_dump()
                     st.session_state.bd_result_version = "legacy"
+                    st.session_state.bd_history_id = save_analysis(
+                        seed=st.session_state.bd_seed,
+                        result_version="legacy",
+                        result=st.session_state.bd_result,
+                    )
                     st.session_state.bd_stage = "result"
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
@@ -206,7 +260,18 @@ def render():
                     st.info("사이드바에서 데모 모드를 켜면 기존 UI와 결과 구조를 확인할 수 있습니다.")
 
     else:
-        if st.session_state.bd_result_version == "v2":
+        if st.session_state.bd_result_version == "v3":
+            from src.vietnam_bd.models_v3 import BDV3AnalysisResult
+
+            language = "ko"
+            result = BDV3AnalysisResult.model_validate(st.session_state.bd_result)
+            page1, page2, page3 = st.tabs([ui(language, "opportunity_tab"), ui(language, "strategy_tab"), ui(language, "meeting_tab")])
+            with page1: render_page_1_opportunity_v3(result, language)
+            with page2: render_page_2_strategy_v3(result, language)
+            with page3: render_page_3_meeting_v3(result, language)
+            if developer_mode and st.session_state.get("bd_v2_research_trace"):
+                render_research_trace(st.session_state.bd_v2_research_trace)
+        elif st.session_state.bd_result_version == "v2":
             from src.vietnam_bd.models import BDV2AnalysisResult
 
             result = BDV2AnalysisResult.model_validate(st.session_state.bd_result)
@@ -240,7 +305,7 @@ def render():
         st.download_button(
             "분석 결과 JSON 다운로드",
             data=json.dumps(result.model_dump(), ensure_ascii=False, indent=2),
-            file_name="opportunity_analysis_v2.json" if st.session_state.bd_result_version == "v2" else "opportunity_analysis.json",
+            file_name=f"opportunity_analysis_{st.session_state.bd_result_version}.json",
             mime="application/json",
             use_container_width=True,
         )

@@ -10,6 +10,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# local BD analysis history
+data/bd_history.sqlite3*
+
 # original standalone-agent archives (superseded by src/lead_sensing, src/vietnam_bd)
 lead-sensing-agent/
 vietnam-bd-agent-poc-main/

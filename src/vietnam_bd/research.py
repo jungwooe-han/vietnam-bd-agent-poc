@@ -736,8 +736,7 @@ active-pursuit recommendations for this project.
 ROUND_FOCUS = {
     "deep": (
         "Current project, current stage, schedule, investment and current ecosystem",
-        "Owner history, prior EPC/GC/Architect relationships and useful peer benchmarks",
-        "Verify discovered partners' current-project participation and cross-check important claims",
+        "Owner history, prior EPC/GC/Architect relationships, useful peer benchmarks, and verification of current-project participation",
     ),
     "limited": (
         "Remaining unawarded scope, procurement route, change orders and add-on openings",
@@ -855,7 +854,34 @@ def _round_prompt(
     previous_rounds: list[ResearchRoundResult],
     query_budget_remaining: int,
 ) -> str:
-    prior = [item.model_dump(mode="json") for item in previous_rounds]
+    prior = [
+        {
+            "round_number": item.round_number,
+            "focus": item.focus,
+            "new_evidence": item.new_evidence[:10],
+            "discovered_entities": [
+                {"name": entity.name, "entity_type": entity.entity_type, "credibility": entity.credibility}
+                for entity in item.discovered_entities[:10]
+            ],
+            "critical_gaps": [gap.topic for gap in item.research_gaps if gap.critical][:8],
+            "follow_up_queries": [query.query for query in item.follow_up_queries[:6]],
+            "claims_to_verify": [claim.claim for claim in item.claims_to_verify[:6]],
+        }
+        for item in previous_rounds
+    ]
+    quick_context = {
+        "company": quick.company,
+        "project_name": quick.project_name,
+        "current_project_summary": quick.current_project_summary,
+        "evidence": [
+            {
+                "claim": item.claim,
+                "credibility": item.credibility,
+                "source_url": item.source_url or next((source.url for source in item.sources if source.url), ""),
+            }
+            for item in _all_quick_evidence(quick)[:24]
+        ],
+    }
     return f"""
 [MODE] {mode}
 [ROUND] {round_number}
@@ -872,7 +898,7 @@ def _round_prompt(
 {seed_understanding.model_dump_json(indent=2)}
 
 [CONTEXT RESEARCH]
-{quick.model_dump_json(indent=2)}
+{json.dumps(quick_context, ensure_ascii=False)}
 
 [FINAL CONTEXT AND STAGE GATE]
 {rule_result.model_dump_json(indent=2)}
@@ -897,7 +923,7 @@ def iterative_research(
     seed_understanding: SeedUnderstanding,
     quick: QuickResearchResult,
     rule_result: RuleEngineResult,
-    max_query_budget: int = 12,
+    max_query_budget: int = 6,
     progress_callback: ProgressCallback | None = None,
 ) -> tuple[DeepResearchResult, list[ResearchRoundResult]]:
     focuses = ROUND_FOCUS[mode]
@@ -1017,14 +1043,14 @@ def research_opportunity(
     )
 
     readiness = assess_context_readiness(seed_understanding, quick)
-    for attempt in range(1, 3):
+    for attempt in range(1, 2):
         if readiness.ready:
             break
         _emit_progress(
             progress_callback,
             "context_research_supplement",
             attempt=attempt,
-            maximum=2,
+            maximum=1,
             missing=readiness.missing_requirements,
         )
         supplement = supplement_context_research(
