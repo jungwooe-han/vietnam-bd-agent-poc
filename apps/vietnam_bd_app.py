@@ -6,7 +6,6 @@ import os
 import streamlit as st
 
 from src.vietnam_bd.engine import ProjectAnalysisInput, analyze_project
-from src.vietnam_bd.guided_questions import generate_guided_questions
 from src.vietnam_bd.history import get_analysis, list_analyses, save_analysis
 from src.vietnam_bd.localization_v3 import ui
 from src.vietnam_bd.ui_components import (
@@ -32,6 +31,33 @@ from src.vietnam_bd.ui_components_v3 import (
 )
 
 
+def _render_entry_hero() -> None:
+    st.markdown(
+        """
+        <section class="bd-entry-hero">
+          <div class="bd-entry-eyebrow">VIETNAM MANUFACTURING · BD INTELLIGENCE</div>
+          <h1>Find the opportunity<br>behind the news.</h1>
+          <p>뉴스에서 사업기회를 발견하고, Samsung DX 관점의 다음 영업 행동까지 연결합니다.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _project_context() -> str:
+    building_types = st.session_state.get("bd_building_types", [])
+    project_stages = st.session_state.get("bd_project_stages", [])
+    context = []
+    if building_types:
+        context.append("건축 유형: " + ", ".join(building_types))
+    if project_stages:
+        context.append("프로젝트 단계: " + ", ".join(project_stages))
+    research_intent = st.session_state.get("bd_research_intent", "").strip()
+    if research_intent:
+        context.append("추가 확인이 필요한 정보 (Research Intent / Information Gap): " + research_intent)
+    return "\n".join(context)
+
+
 def render():
     inject_css()
 
@@ -53,7 +79,7 @@ def render():
     if st.session_state.bd_engine == "BD v3" or st.session_state.bd_result_version == "v3":
         inject_v3_css()
 
-    if st.session_state.bd_stage != "input":
+    if st.session_state.bd_stage not in {"input", "context"}:
         st.markdown(
             "<div class='hero'><h1>Vietnam Manufacturing BD Agent</h1>"
             "<p>아는 정보나 뉴스를 넣으면, 사업기회 관점으로 확장하고 첫 미팅에서 무엇을 알아와야 할지 안내합니다.</p></div>",
@@ -67,6 +93,9 @@ def render():
                 "bd_result",
                 "bd_seed",
                 "bd_questions",
+                "bd_building_types",
+                "bd_project_stages",
+                "bd_research_intent",
                 "bd_uploaded_bytes",
                 "bd_uploaded_name",
                 "bd_handoff_company",
@@ -106,16 +135,7 @@ def render():
             developer_mode = st.checkbox("개발 모드 · Research Trace", value=False) if engine in {"BD v2", "BD v3"} else False
 
     if st.session_state.bd_stage == "input":
-        st.markdown(
-            """
-            <section class="bd-entry-hero">
-              <div class="bd-entry-eyebrow">VIETNAM MANUFACTURING · BD INTELLIGENCE</div>
-              <h1>Find the opportunity<br>behind the news.</h1>
-              <p>뉴스에서 사업기회를 발견하고, Samsung DX 관점의 다음 영업 행동까지 연결합니다.</p>
-            </section>
-            """,
-            unsafe_allow_html=True,
-        )
+        _render_entry_hero()
         if st.session_state.get("bd_handoff_company"):
             st.info(f"📡 리드 센싱에서 전달된 기업: {st.session_state.bd_handoff_company} — 아래 내용을 확인하고 필요하면 보완하세요.")
 
@@ -150,25 +170,62 @@ def render():
                 st.session_state.bd_seed = seed
                 st.session_state.bd_uploaded_bytes = uploaded.getvalue() if uploaded else None
                 st.session_state.bd_uploaded_name = uploaded.name if uploaded else None
-                st.session_state.bd_questions = generate_guided_questions(seed)
-                st.session_state.bd_stage = "guided"
+                st.session_state.bd_stage = "context"
                 st.rerun()
 
-    elif st.session_state.bd_stage == "guided":
-        st.subheader("알고 있는 것만 더 알려줘")
-        st.caption("모르면 비워둬도 됩니다. 입력 내용에 따라 필요한 질문만 표시됩니다.")
-        answers = []
-        for idx, question in enumerate(st.session_state.bd_questions):
-            answer = st.text_input(question, key=f"bd_guided_{idx}", placeholder="모름 / 확인 필요")
-            if answer.strip():
-                answers.append(f"Q: {question}\nA: {answer}")
+    elif st.session_state.bd_stage == "context":
+        _render_entry_hero()
+        with st.container(key="bd_project_context"):
+            st.markdown(
+                '<div class="bd-context-head"><h2>알고 계신 내용을 공유해주세요</h2>'
+                '<p>모든 항목은 선택사항입니다. 비워둔 채 분석해도 됩니다.</p></div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown('<div class="bd-context-label">건축 유형</div>', unsafe_allow_html=True)
+            with st.container(key="bd_building_choices"):
+                st.pills(
+                    "건축 유형",
+                    ["신축", "리모델링", "증축", "스마트공장"],
+                    selection_mode="multi",
+                    key="bd_building_types",
+                    label_visibility="collapsed",
+                )
 
-        c1, c2 = st.columns(2)
-        if c1.button("이전", use_container_width=True):
+            st.markdown('<div class="bd-context-label bd-context-section">프로젝트 단계</div>', unsafe_allow_html=True)
+            with st.container(key="bd_stage_choices"):
+                st.pills(
+                    "프로젝트 단계",
+                    ["초기 기획", "설계 및 발주", "인허가", "시공"],
+                    selection_mode="multi",
+                    key="bd_project_stages",
+                    label_visibility="collapsed",
+                )
+
+            st.markdown(
+                '<div class="bd-context-question">'
+                '<h3>알고 있는 정보와 특별히 확인하고 싶은 내용을 자유롭게 작성해주세요.</h3>'
+                '<p>사업주, 시공사, 설계사 등 현재 파악된 정보가 많을수록 분석이 정교해지며, '
+                '궁금한 내용을 함께 알려주시면 <strong>해당 정보에 초점을 맞춰 더 깊이 탐색합니다.</strong></p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.text_area(
+                "추가로 확인하고 싶은 정보",
+                key="bd_research_intent",
+                height=112,
+                placeholder="예) 사업주는 삼성전자로 확인했지만 시공사는 아직 파악되지 않았습니다. 삼성전자가 과거 유사 프로젝트에서 어떤 시공사와 협업했는지 알고 싶습니다.",
+                label_visibility="collapsed",
+            )
+
+            back_col, action_col = st.columns([1, 2.2], vertical_alignment="center")
+            back_clicked = back_col.button("← 이전", use_container_width=True)
+            analyze_context_clicked = action_col.button("분석 실행 →", type="primary", use_container_width=True)
+
+        if back_clicked:
             st.session_state.bd_stage = "input"
             st.rerun()
-        if c2.button("분석 실행", type="primary", use_container_width=True):
-            guided = "\n\n".join(answers)
+        if analyze_context_clicked:
+            guided = _project_context()
 
             if engine in {"BD v2", "BD v3"}:
                 status = st.status(f"{engine} 분석을 시작합니다.", expanded=True)
