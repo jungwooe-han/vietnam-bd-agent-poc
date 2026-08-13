@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+from typing import Literal
 
 from .models import BDV2AnalysisResult
 from .reasoning import reason_opportunity_v2
@@ -14,6 +15,7 @@ def analyze_opportunity_v2(
     user_context: str = "",
     progress_callback: ProgressCallback | None = None,
     trace_callback: Callable[[dict[str, Any]], None] | None = None,
+    research_provider: Literal["existing", "firecrawl"] = "existing",
 ) -> BDV2AnalysisResult:
     """Run the complete BD v2 pipeline without changing the legacy BD entrypoint."""
 
@@ -22,6 +24,7 @@ def analyze_opportunity_v2(
         extracted=extracted,
         user_context=user_context,
         progress_callback=progress_callback,
+        research_provider=research_provider,
     )
     if trace_callback:
         trace_callback(research_bundle.model_dump(mode="json"))

@@ -7,6 +7,8 @@ import requests
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
+from .telemetry import record_external_api_call
+
 URL_RE = re.compile(r"https?://[^\s]+")
 
 
@@ -16,6 +18,7 @@ def find_urls(text: str) -> list[str]:
 
 def extract_url_text(url: str, timeout: int = 15) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (compatible; BD-Agent-POC/1.0)"}
+    record_external_api_call()
     response = requests.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")

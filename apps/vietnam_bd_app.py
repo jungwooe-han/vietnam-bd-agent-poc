@@ -5,15 +5,9 @@ import os
 
 import streamlit as st
 
-from src.vietnam_bd.analysis import analyze_opportunity
-from src.vietnam_bd.analysis_v2 import analyze_opportunity_v2
-from src.vietnam_bd.analysis_v3 import analyze_opportunity_v3
-from src.vietnam_bd.demo_data import demo_result
-from src.vietnam_bd.demo_data_v2 import demo_v2_result
+from src.vietnam_bd.engine import ProjectAnalysisInput, analyze_project
 from src.vietnam_bd.guided_questions import generate_guided_questions
 from src.vietnam_bd.history import get_analysis, list_analyses, save_analysis
-from src.vietnam_bd.ingestion import build_extracted_context
-from src.vietnam_bd.internal_cases import load_internal_cases
 from src.vietnam_bd.localization_v3 import ui
 from src.vietnam_bd.ui_components import (
     inject_css,
@@ -174,21 +168,7 @@ def render():
             st.session_state.bd_stage = "input"
             st.rerun()
         if c2.button("분석 실행", type="primary", use_container_width=True):
-            uploaded_proxy = None
-            if st.session_state.get("bd_uploaded_bytes"):
-                class UploadedProxy:
-                    def __init__(self, name: str, data: bytes):
-                        self.name = name
-                        self._data = data
-
-                    def getvalue(self) -> bytes:
-                        return self._data
-
-                uploaded_proxy = UploadedProxy(st.session_state.bd_uploaded_name, st.session_state.bd_uploaded_bytes)
-
-            extracted, notes = build_extracted_context(st.session_state.bd_seed, uploaded_proxy)
             guided = "\n\n".join(answers)
-            internal = load_internal_cases()
 
             if engine in {"BD v2", "BD v3"}:
                 status = st.status(f"{engine} 분석을 시작합니다.", expanded=True)
@@ -226,31 +206,25 @@ def render():
                         status.update(label=f"{engine} 상세 분석 완료", state="complete", expanded=False)
 
                 try:
-                    base_result = demo_v2_result(closed=closed_demo) if demo_mode else None
-                    if engine == "BD v3":
-                        from src.vietnam_bd.v3_rule_engine import build_v3_result
-                        result = build_v3_result(base_result, st.session_state.bd_seed, extracted + "\n" + guided) if demo_mode else analyze_opportunity_v3(
-                            st.session_state.bd_seed,
-                            extracted=extracted,
-                            user_context=guided,
-                            progress_callback=progress,
-                            trace_callback=lambda trace: st.session_state.update(bd_v2_research_trace=trace),
-                        )
-                    else:
-                        result = base_result if demo_mode else analyze_opportunity_v2(
-                            st.session_state.bd_seed,
-                            extracted=extracted,
-                            user_context=guided,
-                            progress_callback=progress,
-                            trace_callback=lambda trace: st.session_state.update(bd_v2_research_trace=trace),
-                        )
+                    analysis_run = analyze_project(
+                        ProjectAnalysisInput(
+                            seed=st.session_state.bd_seed,
+                            engine=engine,
+                            guided_answers=guided,
+                            uploaded_name=st.session_state.get("bd_uploaded_name"),
+                            uploaded_bytes=st.session_state.get("bd_uploaded_bytes"),
+                            demo_mode=demo_mode,
+                            closed_demo=closed_demo,
+                        ),
+                        progress_callback=progress,
+                    )
+                    result = analysis_run.result
+                    st.session_state.bd_v2_research_trace = analysis_run.research_trace
                     if demo_mode:
                         status.write("Mock v2 전체 결과 생성 완료")
                         status.update(label=f"{engine} 데모 분석 완료", state="complete", expanded=False)
-                    if notes:
-                        result.source_summary.extend(notes)
                     st.session_state.bd_result = result.model_dump()
-                    st.session_state.bd_result_version = "v3" if engine == "BD v3" else "v2"
+                    st.session_state.bd_result_version = analysis_run.result_version
                     st.session_state.bd_history_id = save_analysis(
                         seed=st.session_state.bd_seed,
                         result_version=st.session_state.bd_result_version,
@@ -266,15 +240,19 @@ def render():
             else:
                 try:
                     with st.spinner("기존 BD 분석을 실행 중..."):
-                        result = (
-                            demo_result()
-                            if demo_mode
-                            else analyze_opportunity(st.session_state.bd_seed, extracted, guided, internal)
+                        analysis_run = analyze_project(
+                            ProjectAnalysisInput(
+                                seed=st.session_state.bd_seed,
+                                engine="기존 BD",
+                                guided_answers=guided,
+                                uploaded_name=st.session_state.get("bd_uploaded_name"),
+                                uploaded_bytes=st.session_state.get("bd_uploaded_bytes"),
+                                demo_mode=demo_mode,
+                            )
                         )
-                    if notes:
-                        result.source_summary.extend(notes)
+                        result = analysis_run.result
                     st.session_state.bd_result = result.model_dump()
-                    st.session_state.bd_result_version = "legacy"
+                    st.session_state.bd_result_version = analysis_run.result_version
                     st.session_state.bd_history_id = save_analysis(
                         seed=st.session_state.bd_seed,
                         result_version="legacy",

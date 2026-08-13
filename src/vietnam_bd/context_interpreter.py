@@ -13,6 +13,7 @@ from .models import (
     StageGate,
 )
 from .research_models import QuickResearchResult
+from .telemetry import record_ai_response, record_retry
 from .rule_engine import (
     RuleEngineResult,
     build_stage_gate,
@@ -233,6 +234,7 @@ use "미확정" or credibility="unknown".
         ),
     )
 
+    record_ai_response(response)
     raw = response.output_text.strip()
     if raw.startswith("```"):
         raw = raw.replace("```json", "").replace("```", "").strip()
@@ -242,6 +244,7 @@ use "미확정" or credibility="unknown".
     except ValidationError as first_error:
         schema = json.dumps(AIContextInterpretation.model_json_schema(), ensure_ascii=False)
         try:
+            record_retry()
             repair = client.responses.create(
                 model=_get_model(),
                 instructions=(
@@ -250,6 +253,7 @@ use "미확정" or credibility="unknown".
                 ),
                 input=f"SCHEMA:\n{schema}\n\nMALFORMED CONTENT:\n{raw}\n\nVALIDATION ERROR:\n{first_error}",
             )
+            record_ai_response(repair)
             repaired = repair.output_text.strip()
             if repaired.startswith("```"):
                 repaired = repaired.replace("```json", "").replace("```", "").strip()

@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
@@ -22,6 +22,11 @@ from .research_models import (
     SeedUnderstanding,
 )
 from .rule_engine import RuleEngineResult, evaluate_context
+from .research_contribution import (
+    record_quick_research_contribution,
+    record_round_research_contribution,
+)
+from .telemetry import measured_step, record_ai_response, record_retry
 
 from .context_interpreter import (
     combine_rule_and_ai_context,
@@ -90,6 +95,7 @@ def _run_web_research(
 
     response = client.responses.create(**request)
 
+    record_ai_response(response, web_search_enabled=use_web)
     raw = strip_code_fences(
         _extract_response_text(response)
     )
@@ -99,6 +105,7 @@ def _run_web_research(
 
     except ValidationError as first_error:
 
+        record_retry()
         repair = client.responses.create(
             model=_get_model(),
             instructions=(
@@ -115,6 +122,7 @@ def _run_web_research(
             ),
         )
 
+        record_ai_response(repair)
         repaired = strip_code_fences(
             _extract_response_text(repair)
         )
@@ -945,26 +953,30 @@ def iterative_research(
             total_rounds=len(focuses),
             focus=focus,
         )
-        result = _run_web_research(
-            instructions=(
-                HISTORICAL_INTELLIGENCE_SYSTEM if mode == "historical"
-                else LIMITED_RESEARCH_SYSTEM if mode == "limited"
-                else DEEP_RESEARCH_SYSTEM
-            ),
-            prompt=_round_prompt(
-                mode=mode,
-                round_number=index,
-                focus=focus,
-                seed=seed,
-                user_context=user_context,
-                seed_understanding=seed_understanding,
-                quick=quick,
-                rule_result=rule_result,
-                previous_rounds=rounds,
-                query_budget_remaining=remaining,
-            ),
-            result_model=ResearchRoundResult,
-        )
+        with measured_step(f"{mode.title()} research round {index}: {focus}"):
+            result = _run_web_research(
+                instructions=(
+                    HISTORICAL_INTELLIGENCE_SYSTEM if mode == "historical"
+                    else LIMITED_RESEARCH_SYSTEM if mode == "limited"
+                    else DEEP_RESEARCH_SYSTEM
+                ),
+                prompt=_round_prompt(
+                    mode=mode,
+                    round_number=index,
+                    focus=focus,
+                    seed=seed,
+                    user_context=user_context,
+                    seed_understanding=seed_understanding,
+                    quick=quick,
+                    rule_result=rule_result,
+                    previous_rounds=rounds,
+                    query_budget_remaining=remaining,
+                ),
+                result_model=ResearchRoundResult,
+            )
+            record_round_research_contribution(
+                f"{mode.title()} research round {index}: {focus}", result
+            )
         result.round_number = index
         new_queries = []
         for query in result.follow_up_queries:
@@ -1021,28 +1033,39 @@ def research_opportunity(
     extracted: str = "",
     user_context: str = "",
     progress_callback: ProgressCallback | None = None,
+    research_provider: Literal["existing", "firecrawl"] = "existing",
 ) -> tuple[ResearchBundle, RuleEngineResult]:
+
+    if research_provider == "firecrawl":
+        from .firecrawl_provider import research_opportunity_firecrawl
+        return research_opportunity_firecrawl(
+            seed=seed, extracted=extracted, user_context=user_context,
+            progress_callback=progress_callback,
+        )
 
     # -----------------------------------------------------
     # STEP 1: Seed Understanding + Context Research
     # -----------------------------------------------------
 
     _emit_progress(progress_callback, "seed_understanding")
-    seed_understanding = understand_seed(
-        seed=seed,
-        extracted=extracted,
-        user_context=user_context,
-    )
+    with measured_step("Seed understanding"):
+        seed_understanding = understand_seed(
+            seed=seed,
+            extracted=extracted,
+            user_context=user_context,
+        )
 
     _emit_progress(progress_callback, "context_research")
-    quick = quick_research(
-        seed=seed,
-        extracted=extracted,
-        user_context=user_context,
-        seed_understanding=seed_understanding,
-    )
+    with measured_step("Primary context research"):
+        quick = quick_research(
+            seed=seed,
+            extracted=extracted,
+            user_context=user_context,
+            seed_understanding=seed_understanding,
+        )
 
     readiness = assess_context_readiness(seed_understanding, quick)
+    record_quick_research_contribution("Primary context research", quick)
     for attempt in range(1, 2):
         if readiness.ready:
             break
@@ -1053,16 +1076,24 @@ def research_opportunity(
             maximum=1,
             missing=readiness.missing_requirements,
         )
-        supplement = supplement_context_research(
-            seed=seed,
-            extracted=extracted,
-            user_context=user_context,
-            seed_understanding=seed_understanding,
-            current=quick,
-            readiness=readiness,
-        )
+        with measured_step(f"Supplementary context research {attempt}"):
+            primary_missing = list(readiness.missing_requirements)
+            supplement = supplement_context_research(
+                seed=seed,
+                extracted=extracted,
+                user_context=user_context,
+                seed_understanding=seed_understanding,
+                current=quick,
+                readiness=readiness,
+            )
         quick = merge_quick_research(quick, supplement)
         readiness = assess_context_readiness(seed_understanding, quick)
+        record_quick_research_contribution(
+            f"Supplementary context research {attempt}",
+            supplement,
+            primary_missing=primary_missing,
+            missing_after=readiness.missing_requirements,
+        )
 
     # -----------------------------------------------------
     # STEP 2
@@ -1077,22 +1108,25 @@ def research_opportunity(
     )
 
     _emit_progress(progress_callback, "context_arbitration")
-    rule_result = evaluate_context(rule_text)
+    with measured_step("Rule engine classification"):
+        rule_result = evaluate_context(rule_text)
 
     # -----------------------------------------------------
     # STEP 2.5
     # AI Context Interpretation
     # -----------------------------------------------------
 
-    ai_context = interpret_context_with_ai(
-        quick=quick,
-    )
+    with measured_step("AI context interpretation"):
+        ai_context = interpret_context_with_ai(
+            quick=quick,
+        )
 
-    final_context, final_stage_gate = combine_rule_and_ai_context(
-        rule_result=rule_result,
-        ai_result=ai_context,
-    )
-    final_context = _attach_context_provenance(final_context, quick)
+    with measured_step("Evidence arbitration and stage gate"):
+        final_context, final_stage_gate = combine_rule_and_ai_context(
+            rule_result=rule_result,
+            ai_result=ai_context,
+        )
+        final_context = _attach_context_provenance(final_context, quick)
 
     # Rule + AI를 반영한 최종 Context
     rule_result.context = final_context

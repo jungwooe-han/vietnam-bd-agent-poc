@@ -11,6 +11,7 @@ from src.common.llm_json import strip_code_fences
 
 from .models import AnalysisResult
 from .prompts import SYSTEM_PROMPT, build_user_prompt
+from .telemetry import record_ai_response, record_retry
 
 
 def _schema_instruction() -> str:
@@ -43,14 +44,17 @@ def analyze_opportunity(seed: str, extracted: str, guided_answers: str, internal
         request["tools"] = [{"type": "web_search"}]
 
     response = client.responses.create(**request)
+    record_ai_response(response, web_search_enabled=enable_web)
     raw = strip_code_fences(_extract_response_text(response))
 
     try:
         return AnalysisResult.model_validate_json(raw)
     except ValidationError as first_error:
+        record_retry()
         repair = client.responses.create(
             model=model,
             instructions="Repair the supplied content into valid JSON matching the given schema. Return JSON only. Do not add facts.",
             input=f"SCHEMA:\n{json.dumps(AnalysisResult.model_json_schema(), ensure_ascii=False)}\n\nCONTENT:\n{raw}\n\nVALIDATION ERROR:\n{first_error}",
         )
+        record_ai_response(repair)
         return AnalysisResult.model_validate_json(strip_code_fences(_extract_response_text(repair)))

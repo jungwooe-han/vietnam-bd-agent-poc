@@ -38,6 +38,7 @@ from .rule_engine import RuleEngineResult
 from .sfdc_sample import match_sample_opportunities
 from .v2_prompts import commercial_prompt, engagement_prompt, workstream_prompt
 from .vertical_guardrails import DEFAULT_WORKSTREAM_GUARDRAILS, WorkstreamGuardrail, allowed_workstream_candidates
+from .telemetry import measured_step, record_ai_response, record_retry
 
 
 class WorkstreamReasoning(BaseModel):
@@ -79,15 +80,18 @@ def _default_runner(prompt: str, result_model: type[ResultT]) -> ResultT:
         instructions="Perform one bounded BD reasoning step. Return valid JSON only.",
         input=f"{prompt}\n\n[REQUIRED JSON SCHEMA]\n{schema}",
     )
+    record_ai_response(response)
     raw = strip_code_fences(_response_text(response))
     try:
         return result_model.model_validate_json(raw)
     except ValidationError as first_error:
+        record_retry()
         repair = client.responses.create(
             model=model,
             instructions="Repair content to the schema. Return JSON only and add no facts.",
             input=f"SCHEMA:\n{schema}\n\nCONTENT:\n{raw}\n\nERROR:\n{first_error}",
         )
+        record_ai_response(repair)
         return result_model.model_validate_json(strip_code_fences(_response_text(repair)))
 
 
@@ -814,27 +818,32 @@ def reason_opportunity_v2(
     runner: StructuredRunner = _default_runner,
     catalog: tuple[WorkstreamGuardrail, ...] = DEFAULT_WORKSTREAM_GUARDRAILS,
 ) -> BDV2AnalysisResult:
-    intelligence = build_project_intelligence(bundle)
-    relationship_map = build_relationship_map(bundle, intelligence)
-    dx_matches = match_dx_portfolio(rule_result.context)
-    decision = decide_business_development(bundle, rule_result, intelligence, dx_matches)
-    must_knows = build_must_know_top3(bundle, decision, relationship_map, dx_matches)
-    proposals = build_proposal_hypotheses(decision, dx_matches, must_knows)
-    workstreams = select_workstreams(
-        bundle, rule_result, seed=seed, runner=runner, catalog=catalog,
-        decision=decision, intelligence=intelligence,
-    )
-    commercial = assess_commercial_entry(
-        bundle, rule_result, workstreams, seed=seed, runner=runner,
-        decision=decision, intelligence=intelligence,
-    )
-    commercial.stakeholders = align_stakeholders_to_relationship_map(
-        commercial.stakeholders, relationship_map, must_knows,
-    )
-    engagement = build_engagement_intelligence(
-        bundle, rule_result, workstreams, commercial, seed=seed, runner=runner,
-        decision=decision, intelligence=intelligence,
-    )
+    with measured_step("Project and relationship intelligence"):
+        intelligence = build_project_intelligence(bundle)
+        relationship_map = build_relationship_map(bundle, intelligence)
+    with measured_step("Customer need and product mapping"):
+        dx_matches = match_dx_portfolio(rule_result.context)
+        decision = decide_business_development(bundle, rule_result, intelligence, dx_matches)
+        must_knows = build_must_know_top3(bundle, decision, relationship_map, dx_matches)
+        proposals = build_proposal_hypotheses(decision, dx_matches, must_knows)
+    with measured_step("Workstream selection"):
+        workstreams = select_workstreams(
+            bundle, rule_result, seed=seed, runner=runner, catalog=catalog,
+            decision=decision, intelligence=intelligence,
+        )
+    with measured_step("Commercial entry and stakeholder discovery"):
+        commercial = assess_commercial_entry(
+            bundle, rule_result, workstreams, seed=seed, runner=runner,
+            decision=decision, intelligence=intelligence,
+        )
+        commercial.stakeholders = align_stakeholders_to_relationship_map(
+            commercial.stakeholders, relationship_map, must_knows,
+        )
+    with measured_step("Questions and talking points"):
+        engagement = build_engagement_intelligence(
+            bundle, rule_result, workstreams, commercial, seed=seed, runner=runner,
+            decision=decision, intelligence=intelligence,
+        )
     title = bundle.quick.project_name or bundle.quick.company or seed.strip()[:100] or "BD Opportunity"
     summary = bundle.quick.current_project_summary or rule_result.stage_gate.rationale
     sources = list(dict.fromkeys(bundle.quick.source_summary + (bundle.deep.source_summary if bundle.deep else [])))
@@ -881,4 +890,5 @@ def reason_opportunity_v2(
             [item.workstream for item in proposals],
         ),
     )
-    return enforce_stage_gate_output(result)
+    with measured_step("Final output building"):
+        return enforce_stage_gate_output(result)
