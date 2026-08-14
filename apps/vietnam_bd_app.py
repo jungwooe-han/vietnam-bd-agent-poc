@@ -6,7 +6,14 @@ import os
 import streamlit as st
 
 from src.vietnam_bd.engine import ProjectAnalysisInput, analyze_project
-from src.vietnam_bd.history import get_analysis, list_analyses, save_analysis
+from src.vietnam_bd.history import (
+    complete_analysis,
+    fail_analysis,
+    get_analysis,
+    list_analyses,
+    start_analysis,
+    update_analysis_progress,
+)
 from src.vietnam_bd.localization_v3 import ui
 from src.vietnam_bd.ui_components import (
     inject_css,
@@ -108,19 +115,43 @@ def render():
 
         with st.expander("최근 분석", expanded=False):
             history_items = list_analyses()
+            st.caption("이 서버를 이용하는 모든 사용자가 함께 보는 검색·분석 이력입니다.")
             if not history_items:
                 st.caption("아직 저장된 분석이 없습니다.")
             for item in history_items:
                 created_label = item.created_at.replace("T", " ")[:16]
+                status_label = {
+                    "completed": "완료",
+                    "running": "진행 중",
+                    "failed": "실패",
+                }.get(item.status, item.status)
                 if st.button(
-                    f"{item.title}\n{created_label} · {item.result_version}",
+                    f"{item.title}\n{created_label} · {status_label} · {item.engine or item.result_version}",
                     key=f"bd_history_{item.history_id}",
                     use_container_width=True,
+                    disabled=item.status != "completed",
                 ):
                     saved = get_analysis(item.history_id)
                     if saved is not None:
+                        saved_result = saved.result
+                        if saved.result_version == "v3":
+                            from src.vietnam_bd.models_v3 import BDV3AnalysisResult
+                            from src.vietnam_bd.v3_rule_engine import build_v3_result
+
+                            parsed = BDV3AnalysisResult.model_validate(saved_result)
+                            rebuilt_map = build_v3_result(
+                                parsed.v2_snapshot, saved.seed
+                            ).relationship_map
+                            saved_result = dict(saved_result)
+                            saved_result["relationship_map"] = rebuilt_map.model_dump()
+                            complete_analysis(
+                                saved.history_id,
+                                result_version=saved.result_version,
+                                result=saved_result,
+                                research_trace=saved.research_trace,
+                            )
                         st.session_state.bd_seed = saved.seed
-                        st.session_state.bd_result = saved.result
+                        st.session_state.bd_result = saved_result
                         st.session_state.bd_result_version = saved.result_version
                         st.session_state.bd_v2_research_trace = saved.research_trace
                         st.session_state.bd_history_id = saved.history_id
@@ -226,17 +257,29 @@ def render():
             st.rerun()
         if analyze_context_clicked:
             guided = _project_context()
+            history_id = start_analysis(
+                seed=st.session_state.bd_seed,
+                engine=engine,
+                research_provider="existing",
+                guided_context=guided,
+            )
+            history_events: list[dict] = []
+            st.session_state.bd_history_id = history_id
 
             if engine in {"BD v2", "BD v3"}:
                 status = st.status("영업 기회 분석을 시작합니다.", expanded=True)
 
                 def progress(event: str, details: dict) -> None:
+                    history_events.append({"event": event, "details": details})
+                    update_analysis_progress(history_id, {"events": history_events})
                     if event == "seed_understanding":
                         status.write("입력 내용 파악 중")
                     elif event == "context_research":
                         status.write("프로젝트 기본 정보 확인 중")
                     elif event == "context_research_supplement":
                         status.write(f"부족한 프로젝트 정보 추가 확인 {details['attempt']}/{details['maximum']}")
+                    elif event == "location_research_supplement":
+                        status.write("프로젝트 부지 위치 근거 추가 확인 중")
                     elif event == "context_arbitration":
                         status.write("사업 단계와 핵심 맥락 정리 중")
                     elif event == "stage_gate":
@@ -274,14 +317,16 @@ def render():
                         progress_callback=progress,
                     )
                     result = analysis_run.result
-                    st.session_state.bd_v2_research_trace = analysis_run.research_trace
+                    persisted_trace = dict(analysis_run.research_trace)
+                    persisted_trace["events"] = history_events
+                    st.session_state.bd_v2_research_trace = persisted_trace
                     if demo_mode:
                         status.write("예시 분석 결과 생성 완료")
                         status.update(label="예시 영업 기회 분석이 완료되었습니다.", state="complete", expanded=False)
                     st.session_state.bd_result = result.model_dump()
                     st.session_state.bd_result_version = analysis_run.result_version
-                    st.session_state.bd_history_id = save_analysis(
-                        seed=st.session_state.bd_seed,
+                    complete_analysis(
+                        history_id,
                         result_version=st.session_state.bd_result_version,
                         result=st.session_state.bd_result,
                         research_trace=st.session_state.bd_v2_research_trace,
@@ -289,6 +334,11 @@ def render():
                     st.session_state.bd_stage = "result"
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
+                    fail_analysis(
+                        history_id,
+                        error_message=str(exc),
+                        research_trace={"events": history_events},
+                    )
                     status.update(label=f"{engine} 분석 실패", state="error", expanded=True)
                     st.error(f"{engine} 분석에 실패했습니다: {exc}")
                     st.info("사이드바에서 BD v2 또는 기존 BD 엔진으로 언제든 전환할 수 있습니다.")
@@ -308,14 +358,15 @@ def render():
                         result = analysis_run.result
                     st.session_state.bd_result = result.model_dump()
                     st.session_state.bd_result_version = analysis_run.result_version
-                    st.session_state.bd_history_id = save_analysis(
-                        seed=st.session_state.bd_seed,
+                    complete_analysis(
+                        history_id,
                         result_version="legacy",
                         result=st.session_state.bd_result,
                     )
                     st.session_state.bd_stage = "result"
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
+                    fail_analysis(history_id, error_message=str(exc))
                     st.error(f"기존 BD 분석에 실패했습니다: {exc}")
                     st.info("사이드바에서 데모 모드를 켜면 기존 UI와 결과 구조를 확인할 수 있습니다.")
 

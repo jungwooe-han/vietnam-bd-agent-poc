@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import html
 import re
+from urllib.parse import quote_plus, urlparse
 
 import streamlit as st
 
+from .models import ProjectLocation
 from .models_v3 import BDV3AnalysisResult, V3StakeholderTarget
 from .localization_v3 import ui
 
@@ -51,7 +53,7 @@ def inject_v3_css() -> None:
         .v3-map-shell{background:#f7f7f7;border:0;border-radius:20px;padding:24px 32px 12px;box-shadow:none}
         .v3-map-legend{display:flex;justify-content:flex-end;gap:14px;color:#7b8497;font-size:11px;padding:2px 4px 4px}.v3-map-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
         .v3-overview{border-top:2px solid #000;border-bottom:1px solid #ddd;padding:18px 0 16px;margin:0 0 20px}.v3-overview-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr);gap:34px}.v3-project-name{font-family:"Samsung Sharp Sans","SamsungOneKorean",Arial,sans-serif;font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-.03em}.v3-project-summary{font-size:13px;line-height:1.6;color:#444;margin-top:7px;max-width:760px}.v3-overview-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px 22px;margin-top:15px}.v3-kv{min-width:0}.v3-kv-label{color:#777;font-size:9px;line-height:1.3;font-weight:700;letter-spacing:.1em;text-transform:uppercase}.v3-kv-value{color:#000;font-size:13px;line-height:1.45;font-weight:600;margin-top:3px;overflow-wrap:anywhere}.v3-players{border-left:1px solid #ddd;padding-left:25px}.v3-players-title{font-size:10px;font-weight:700;letter-spacing:.13em;margin-bottom:8px}.v3-player{display:grid;grid-template-columns:78px 1fr auto;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid #eee;font-size:11px}.v3-player-role{color:#777;font-weight:700}.v3-player-company{font-weight:600;overflow-wrap:anywhere}.v3-player-state{font-size:8px;letter-spacing:.06em;color:#777}.v3-timeline{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid #ddd;margin-top:15px}.v3-milestone{position:relative;padding:11px 12px 0 0}.v3-milestone:before{content:'';position:absolute;top:-3px;left:0;width:6px;height:6px;background:#000;border-radius:50%}.v3-milestone-date{font-size:12px;font-weight:700}.v3-milestone-name{font-size:10px;color:#777;margin-top:3px}.v3-decision{display:grid;grid-template-columns:105px minmax(0,1fr) minmax(180px,.42fr);gap:20px;align-items:start;padding:14px 0 15px 15px;margin:0 0 20px;border-left:3px solid #000;border-bottom:1px solid #ddd}.v3-decision.now{border-left-color:#16794b}.v3-decision.monitor{border-left-color:#a36a00}.v3-decision.closed{border-left-color:#b42318}.v3-decision-status{font-size:20px;font-weight:700}.v3-decision-label{font-size:9px;color:#777;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px}.v3-decision-copy{font-size:13px;line-height:1.55}.v3-context-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid #222;border-bottom:1px solid #ddd}.v3-context{padding:13px 16px 12px 0;margin-right:16px;border-right:1px solid #e5e5e5;min-width:0}.v3-context:last-child{border-right:0;margin-right:0}.v3-context-value{font-size:15px;line-height:1.35;font-weight:700;margin:6px 0 8px;overflow-wrap:anywhere}.v3-context-evidence{font-size:10px;line-height:1.45;color:#777;margin-top:7px}
-        .v3-overview-grid{grid-template-columns:1fr;gap:0}.v3-kv-label-row{display:flex;align-items:center;gap:6px}.v3-source{position:relative;display:inline-flex}.v3-source>summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border:1px solid #bbb;border-radius:50%;color:#666;font-size:9px;font-weight:700;cursor:pointer}.v3-source>summary::-webkit-details-marker{display:none}.v3-source[open]>summary{background:#000;color:#fff;border-color:#000}.v3-popover{position:absolute;z-index:20;top:22px;left:0;width:min(340px,80vw);padding:13px 14px;border:1px solid #ccc;background:#fff;box-shadow:0 10px 30px rgba(0,0,0,.14);font-size:11px;line-height:1.5;color:#333;text-transform:none;letter-spacing:0}.v3-popover-title{font-size:10px;font-weight:700;letter-spacing:.08em;margin-bottom:7px}.v3-source-row{padding:7px 0;border-top:1px solid #eee}.v3-source-row:first-of-type{border-top:0}.v3-source-row a{color:#000;font-weight:700;text-decoration:underline;text-underline-offset:2px}.v3-source-date{color:#777;margin-left:5px}.v3-hypothesis{margin-top:9px;padding:9px;background:#faf7ef;border-left:2px solid #b47a10}.v3-hypothesis b{display:block;color:#8a5a00;font-size:9px;letter-spacing:.06em;margin-bottom:3px}.v3-needs{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:16px}.v3-need-label{font-size:9px;font-weight:700;letter-spacing:.1em;color:#777;margin-right:3px}.v3-need{position:relative}.v3-need>summary{list-style:none;display:inline-flex;padding:5px 9px;border:1px solid #ddd;border-radius:3px;background:#fff;color:#000;font-size:10px;font-weight:600;cursor:pointer}.v3-need>summary::-webkit-details-marker{display:none}.v3-need[open]>summary{border-color:#000}.v3-stage-shell{margin:22px 0 24px;padding:16px 0 14px;border-top:1px solid #222;border-bottom:1px solid #ddd}.v3-stage-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:11px}.v3-stage-current{font-size:12px;font-weight:700}.v3-stage-current span{color:#777;font-size:9px;letter-spacing:.08em;margin-right:7px}.v3-stage-bands{display:grid;grid-template-columns:2fr 4fr 2fr 1fr;gap:2px;margin-bottom:4px}.v3-stage-band{padding:4px 5px;text-align:center;font-size:8px;font-weight:700;letter-spacing:.05em}.v3-stage-band.targeting{background:#eef3fb;color:#315b92}.v3-stage-band.golden{background:#fff2c7;color:#805500}.v3-stage-band.local{background:#f1f1f1;color:#555}.v3-stage-band.closed{background:#f7e7e5;color:#8d3029}.v3-stage-track{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:2px}.v3-stage-item{position:relative;min-height:46px;padding:9px 4px 5px;border-top:3px solid #ddd;color:#777;font-size:9px;line-height:1.25;text-align:center}.v3-stage-item.passed{border-color:#777;color:#444}.v3-stage-item.active{border-color:#000;background:#f7f7f7;color:#000;font-weight:700}.v3-stage-item.active:before{content:'';position:absolute;top:-6px;left:50%;transform:translateX(-50%);width:9px;height:9px;border-radius:50%;background:#000}.v3-stage-unknown{font-size:11px;color:#777;padding:8px 0}.v3-decision-guide{font-size:14px;line-height:1.65;color:#111}.v3-decision-facts{margin:9px 0 0;padding:0;list-style:none}.v3-decision-facts li{position:relative;padding:4px 0 4px 13px;color:#555;font-size:11px;line-height:1.45}.v3-decision-facts li:before{content:'·';position:absolute;left:2px;font-weight:700}.v3-map-summary{display:flex;gap:18px;flex-wrap:wrap;padding:9px 0 12px;color:#555;font-size:10px}.v3-map-summary b{color:#000}.v3-map-next{margin-left:auto}.v3-node-scope{font-size:8px;letter-spacing:.05em}
+        .v3-overview-grid{grid-template-columns:1fr;gap:0}.v3-kv-label-row{display:flex;align-items:center;gap:6px}.v3-source{position:relative;display:inline-flex}.v3-source>summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border:1px solid #bbb;border-radius:50%;color:#666;font-size:9px;font-weight:700;cursor:pointer}.v3-source>summary::-webkit-details-marker{display:none}.v3-source[open]>summary{background:#000;color:#fff;border-color:#000}.v3-popover{position:absolute;z-index:20;top:22px;left:0;width:min(340px,80vw);padding:13px 14px;border:1px solid #ccc;background:#fff;box-shadow:0 10px 30px rgba(0,0,0,.14);font-size:11px;line-height:1.5;color:#333;text-transform:none;letter-spacing:0}.v3-popover-title{font-size:10px;font-weight:700;letter-spacing:.08em;margin-bottom:7px}.v3-source-row{padding:7px 0;border-top:1px solid #eee}.v3-source-row:first-of-type{border-top:0}.v3-source-row a{color:#000;font-weight:700;text-decoration:underline;text-underline-offset:2px}.v3-source-date{color:#777;margin-left:5px}.v3-hypothesis{margin-top:9px;padding:9px;background:#faf7ef;border-left:2px solid #b47a10}.v3-hypothesis b{display:block;color:#8a5a00;font-size:9px;letter-spacing:.06em;margin-bottom:3px}.v3-hypothesis-source{margin-top:6px}.v3-hypothesis-source a{color:#6f4900;font-weight:700;text-decoration:underline;text-underline-offset:2px}.v3-needs{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:16px}.v3-need-label{font-size:9px;font-weight:700;letter-spacing:.1em;color:#777;margin-right:3px}.v3-need{position:relative}.v3-need>summary{list-style:none;display:inline-flex;padding:5px 9px;border:1px solid #ddd;border-radius:3px;background:#fff;color:#000;font-size:10px;font-weight:600;cursor:pointer}.v3-need>summary::-webkit-details-marker{display:none}.v3-need[open]>summary{border-color:#000}.v3-stage-shell{margin:22px 0 24px;padding:16px 0 14px;border-top:1px solid #222;border-bottom:1px solid #ddd}.v3-stage-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:11px}.v3-stage-current{font-size:12px;font-weight:700}.v3-stage-current span{color:#777;font-size:9px;letter-spacing:.08em;margin-right:7px}.v3-stage-bands{display:grid;grid-template-columns:2fr 4fr 2fr 1fr;gap:2px;margin-bottom:4px}.v3-stage-band{padding:4px 5px;text-align:center;font-size:8px;font-weight:700;letter-spacing:.05em}.v3-stage-band.targeting{background:#eef3fb;color:#315b92}.v3-stage-band.golden{background:#fff2c7;color:#805500}.v3-stage-band.local{background:#f1f1f1;color:#555}.v3-stage-band.closed{background:#f7e7e5;color:#8d3029}.v3-stage-track{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:2px}.v3-stage-item{position:relative;min-height:46px;padding:9px 4px 5px;border-top:3px solid #ddd;color:#777;font-size:9px;line-height:1.25;text-align:center}.v3-stage-item.passed{border-color:#777;color:#444}.v3-stage-item.active{border-color:#000;background:#f7f7f7;color:#000;font-weight:700}.v3-stage-item.active:before{content:'';position:absolute;top:-6px;left:50%;transform:translateX(-50%);width:9px;height:9px;border-radius:50%;background:#000}.v3-stage-unknown{font-size:11px;color:#777;padding:8px 0}.v3-decision-guide{font-size:14px;line-height:1.65;color:#111}.v3-decision-facts{margin:9px 0 0;padding:0;list-style:none}.v3-decision-facts li{position:relative;padding:4px 0 4px 13px;color:#555;font-size:11px;line-height:1.45}.v3-decision-facts li:before{content:'·';position:absolute;left:2px;font-weight:700}.v3-map-summary{display:flex;gap:18px;flex-wrap:wrap;padding:9px 0 12px;color:#555;font-size:10px}.v3-map-summary b{color:#000}.v3-map-next{margin-left:auto}.v3-node-scope{font-size:8px;letter-spacing:.05em}
         /* Result pages: editorial report language aligned with the BD entry screen. */
         [data-testid="stTabs"]{max-width:1180px;margin:24px auto 0}[data-testid="stTabs"] button[role="tab"]{padding:4px 0 11px;font-size:14px;font-weight:600}
         .v3-head{align-items:flex-start;gap:24px;margin:36px 0 28px;padding:0 0 22px;border-bottom:1px solid #ddd}.v3-head h1{font-size:30px;line-height:1.18;letter-spacing:-.035em}.v3-head p{max-width:760px;color:#555;font-size:15px;line-height:1.55}.v3-eyebrow,.v3-label{font-size:10px;letter-spacing:.14em}.v3-step{width:32px;height:32px;border-radius:0;border:1px solid #000;background:#fff;color:#000;font-size:12px}
@@ -76,7 +78,8 @@ def inject_v3_css() -> None:
         .v3-ai{padding:16px 18px;margin:6px 0 22px}.v3-ai-title{font-size:11px;letter-spacing:.05em;margin-bottom:7px}.v3-ai-copy{font-size:14px;line-height:1.65}
         .v3-tier{padding:5px 9px;font-size:11px;letter-spacing:0}.v3-role{font-size:12px;line-height:1.45}.v3-company{font-size:18px;line-height:1.4;margin:6px 0 12px}.v3-meta{font-size:13px;line-height:1.5}
         .v3-question{padding:14px 2px}.v3-question-title{font-size:14px;line-height:1.55}.v3-question-sub{font-size:12px;line-height:1.5}.v3-talk{padding:14px 2px}.v3-talk b{font-size:13px}.v3-talk p,.v3-product-copy{font-size:13px;line-height:1.6}.v3-signal{padding:6px 10px;font-size:11px}.v3-product{padding:16px 4px}.v3-rank{font-size:11px;letter-spacing:0}.v3-product-name{font-size:20px;margin:6px 0 10px}
-        .v3-overview{padding:16px 0 14px;margin-bottom:18px}.v3-project-name{font-size:24px;line-height:1.3}.v3-project-summary{max-width:none;font-size:14px;line-height:1.62;margin-top:6px}.v3-overview-facts{gap:10px 22px;margin-top:14px}.v3-kv-label{font-size:11px;line-height:1.35;letter-spacing:.04em;text-transform:none}.v3-kv-value{font-size:14px;line-height:1.5;margin-top:2px}.v3-milestone-date{font-size:12px}.v3-milestone-name{font-size:12px;line-height:1.5;color:#666}.v3-need-label{font-size:11px;letter-spacing:.04em}.v3-need>summary{padding:6px 10px;font-size:11px}.v3-popover{font-size:12px;line-height:1.55}.v3-popover-title,.v3-hypothesis b{font-size:11px;letter-spacing:.03em}
+        .v3-overview{padding:16px 0 14px;margin-bottom:18px}.v3-project-name{font-size:24px;line-height:1.3}.v3-project-summary{max-width:none;font-size:14px;line-height:1.62;margin-top:6px}.v3-overview-facts{gap:10px 22px;margin-top:14px}.v3-kv-label{font-size:11px;line-height:1.35;letter-spacing:.04em;text-transform:none}.v3-kv-value{font-size:14px;line-height:1.5;margin-top:2px}.v3-timeline-head{display:flex;align-items:baseline;gap:10px;margin-top:18px}.v3-timeline-head b{font-size:12px}.v3-timeline-head span{color:#777;font-size:10px}.v3-timeline{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:8px}.v3-milestone-date{font-size:12px}.v3-milestone-name{font-size:12px;line-height:1.5;color:#666}.v3-milestone-sources{margin-top:6px;font-size:10px;line-height:1.4}.v3-milestone-sources a{color:#333;font-weight:700;text-decoration:underline;text-underline-offset:2px}.v3-need-label{font-size:11px;letter-spacing:.04em}.v3-need>summary{padding:6px 10px;font-size:11px}.v3-popover{font-size:12px;line-height:1.55}.v3-popover-title,.v3-hypothesis b{font-size:11px;letter-spacing:.03em}
+        .st-key-v3_project_overview{margin:0 0 18px;padding:16px 0 14px;border-top:2px solid #000;border-bottom:1px solid #ddd}.v3-overview-head{margin-bottom:4px}.st-key-v3_project_overview [data-testid="stHorizontalBlock"]{gap:28px}.st-key-v3_site_location{height:100%;padding:14px;border:1px solid #ddd;background:#fafafa}.v3-site-label{color:#666;font-size:11px;line-height:1.35;font-weight:700;letter-spacing:.04em}.v3-site-title{display:flex;align-items:center;gap:6px;margin-top:7px;color:#000;font-size:17px;line-height:1.4;font-weight:700}.v3-site-place{margin-top:4px;color:#444;font-size:13px;line-height:1.5}.v3-site-level{display:inline-flex;margin-top:10px;padding:4px 7px;border:1px solid #d2d2d2;background:#fff;color:#444;font-size:11px;line-height:1.3;font-weight:600}.v3-site-note{margin-top:9px;color:#666;font-size:12px;line-height:1.5}.v3-site-unknown{padding:18px 0 12px}.v3-site-unknown strong{display:block;color:#222;font-size:15px;line-height:1.45}.v3-site-unknown span{display:block;margin-top:5px;color:#666;font-size:12px;line-height:1.5}.st-key-v3_site_location [data-testid="stMap"]{margin-top:11px}.v3-site-map-caption{margin-top:6px;color:#777;font-size:11px;line-height:1.45}
         .v3-stage-shell{margin:18px 0 22px;padding:18px 20px 16px;border:1px solid #d8d8d8;border-left:4px solid #000;background:#fafafa}.v3-stage-head{align-items:flex-start;gap:20px;margin-bottom:10px}.v3-stage-copy{min-width:0}.v3-stage-label{color:#666;font-size:12px;line-height:1.35;font-weight:600;margin-bottom:3px}.v3-stage-current{display:flex;align-items:center;gap:8px;font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-.025em}.v3-stage-current strong{font-weight:700}.v3-stage-note{margin-top:5px;color:#555;font-size:13px;line-height:1.5}.v3-stage-gate{flex:0 0 auto;max-width:260px;padding:6px 10px;border:1px solid #cfcfcf;background:#fff;color:#222;font-size:11px;line-height:1.35;font-weight:700}.v3-stage-progress{margin:12px 0 7px;color:#555;font-size:12px;line-height:1.4;font-weight:600}.v3-stage-bands{gap:3px;margin-bottom:5px}.v3-stage-band{padding:5px 6px;font-size:10px;line-height:1.35;letter-spacing:0}.v3-stage-track{gap:3px}.v3-stage-item{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;min-height:56px;padding:10px 5px 6px;border-top-width:3px;background:#fff;color:#666;font-size:11px;line-height:1.3;font-weight:500}.v3-stage-item.passed{border-color:#777;background:#f3f3f3;color:#444}.v3-stage-item.active{border-color:#000;background:#111;color:#fff;font-weight:700}.v3-stage-item.active:before{width:10px;height:10px;background:#111;border:2px solid #fff;box-shadow:0 0 0 1px #111}.v3-stage-state{font-size:10px;line-height:1.2;font-weight:700;color:#666}.v3-stage-item.active .v3-stage-state{color:#fff}.v3-stage-item.upcoming .v3-stage-state{color:#315b92}.v3-stage-unknown{font-size:12px;line-height:1.5}
         .v3-decision{grid-template-columns:120px minmax(0,1fr) minmax(190px,.42fr);gap:18px;padding:15px 0 16px 16px;margin-bottom:18px}.v3-decision-label{font-size:11px;line-height:1.4;letter-spacing:.04em;text-transform:none;margin-bottom:5px}.v3-decision-status{font-size:22px;line-height:1.35}.v3-decision-guide{font-size:14px;line-height:1.65}.v3-decision-facts li{font-size:12px;line-height:1.5}.v3-decision-copy{font-size:13px;line-height:1.6}
         .v3-map-shell{padding:16px 20px 9px}.v3-map-summary{gap:16px;padding:8px 0 11px;font-size:12px;line-height:1.5}.v3-map-legend{font-size:12px;line-height:1.4}.v3-map-next{margin-left:auto}
@@ -84,7 +87,7 @@ def inject_v3_css() -> None:
         .bd-context-head p{font-size:12px}.bd-context-label{font-size:12px}.bd-context-question h3{font-size:14px}.bd-context-question p{font-size:12px}.st-key-bd_project_context [data-testid="stTextArea"] textarea{font-size:13px}.st-key-bd_project_context .stButton>button{font-size:14px}
         @media(prefers-reduced-motion:reduce){.st-key-bd_project_context{animation:none}}
         @media(max-width:900px){.v3-overview-grid{grid-template-columns:1fr}.v3-players{border-left:0;border-top:1px solid #ddd;padding:15px 0 0}.v3-context-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v3-context:nth-child(2){border-right:0}.v3-decision{grid-template-columns:92px 1fr}.v3-decision-trigger{grid-column:2}}
-        @media(max-width:760px){.v3-head{flex-direction:column;margin:22px 0 18px}.v3-head h1{font-size:25px}.v3-gate{grid-template-columns:1fr}.v3-meta{grid-template-columns:1fr}.block-container{padding-left:1rem!important;padding-right:1rem!important}.v3-overview{padding-top:14px}.v3-project-name{font-size:21px}.v3-overview-facts{grid-template-columns:1fr}.v3-timeline{grid-template-columns:1fr;border-top:0;border-left:1px solid #ddd;margin-left:3px}.v3-milestone{padding:0 0 13px 15px}.v3-milestone:before{top:5px;left:-3px}.v3-player{grid-template-columns:65px 1fr}.v3-player-state{grid-column:2}.v3-decision{grid-template-columns:1fr;gap:8px;padding-left:12px}.v3-decision-trigger{grid-column:1}.v3-context-grid{grid-template-columns:1fr}.v3-context,.v3-context:nth-child(2){border-right:0;border-bottom:1px solid #eee;margin-right:0;padding-right:0}.bd-entry-hero{padding:6vh 4px 26px}.bd-entry-hero h1{font-size:38px}.bd-entry-hero p{font-size:15px}.st-key-bd_entry_composer{padding:10px 12px 12px;border-radius:20px}.st-key-bd_entry_composer [data-testid="stHorizontalBlock"]{flex-wrap:wrap}.st-key-bd_entry_composer [data-testid="column"]{min-width:100%!important;width:100%!important}.st-key-bd_entry_composer [data-testid="stPopover"] button,.st-key-bd_entry_composer .stButton>button{width:100%}.st-key-bd_project_context{padding:22px 18px 18px;border-radius:20px}.bd-context-head{display:block;margin-bottom:18px}.bd-context-head h2{font-size:21px}.bd-context-head p{text-align:left;margin-top:7px}.st-key-bd_building_choices [data-testid="stButtonGroup"],.st-key-bd_stage_choices [data-testid="stButtonGroup"]{flex-wrap:wrap!important;gap:5px!important}.st-key-bd_building_choices [data-testid="stButtonGroup"] button,.st-key-bd_stage_choices [data-testid="stButtonGroup"] button{min-height:36px!important;padding:6px 11px!important;font-size:12px!important}.st-key-bd_project_context>.stVerticalBlock>div:last-child [data-testid="stHorizontalBlock"]{flex-wrap:nowrap}.bd-entry-outcomes{line-height:1.7;padding:0 24px}}
+        @media(max-width:760px){.v3-head{flex-direction:column;margin:22px 0 18px}.v3-head h1{font-size:25px}.v3-gate{grid-template-columns:1fr}.v3-meta{grid-template-columns:1fr}.block-container{padding-left:1rem!important;padding-right:1rem!important}.v3-overview{padding-top:14px}.v3-project-name{font-size:21px}.v3-overview-facts{grid-template-columns:1fr}.st-key-v3_site_location{margin-top:10px}.v3-timeline{grid-template-columns:1fr;border-top:0;border-left:1px solid #ddd;margin-left:3px}.v3-milestone{padding:0 0 13px 15px}.v3-milestone:before{top:5px;left:-3px}.v3-player{grid-template-columns:65px 1fr}.v3-player-state{grid-column:2}.v3-decision{grid-template-columns:1fr;gap:8px;padding-left:12px}.v3-decision-trigger{grid-column:1}.v3-context-grid{grid-template-columns:1fr}.v3-context,.v3-context:nth-child(2){border-right:0;border-bottom:1px solid #eee;margin-right:0;padding-right:0}.bd-entry-hero{padding:6vh 4px 26px}.bd-entry-hero h1{font-size:38px}.bd-entry-hero p{font-size:15px}.st-key-bd_entry_composer{padding:10px 12px 12px;border-radius:20px}.st-key-bd_entry_composer [data-testid="stHorizontalBlock"]{flex-wrap:wrap}.st-key-bd_entry_composer [data-testid="column"]{min-width:100%!important;width:100%!important}.st-key-bd_entry_composer [data-testid="stPopover"] button,.st-key-bd_entry_composer .stButton>button{width:100%}.st-key-bd_project_context{padding:22px 18px 18px;border-radius:20px}.bd-context-head{display:block;margin-bottom:18px}.bd-context-head h2{font-size:21px}.bd-context-head p{text-align:left;margin-top:7px}.st-key-bd_building_choices [data-testid="stButtonGroup"],.st-key-bd_stage_choices [data-testid="stButtonGroup"]{flex-wrap:wrap!important;gap:5px!important}.st-key-bd_building_choices [data-testid="stButtonGroup"] button,.st-key-bd_stage_choices [data-testid="stButtonGroup"] button{min-height:36px!important;padding:6px 11px!important;font-size:12px!important}.st-key-bd_project_context>.stVerticalBlock>div:last-child [data-testid="stHorizontalBlock"]{flex-wrap:nowrap}.bd-entry-outcomes{line-height:1.7;padding:0 24px}}
         @media(max-width:760px){.v3-popover{position:fixed;z-index:999;top:16%;left:16px;right:16px;width:auto;max-height:68vh;overflow:auto}.v3-stage-shell{padding:16px 14px}.v3-stage-head{display:block}.v3-stage-gate{display:inline-block;max-width:none;margin-top:10px}.v3-stage-bands{display:none}.v3-stage-track{grid-template-columns:1fr}.v3-stage-item{min-height:0;flex-direction:row;justify-content:space-between;padding:9px 10px 9px 17px;border-top:0;border-left:3px solid #ddd;text-align:left}.v3-stage-item.active{border-left-color:#000}.v3-stage-item.active:before{top:50%;left:-6px;transform:translateY(-50%)}.v3-decision-facts li{font-size:12px}.v3-map-next{width:100%;margin-left:0}}
         </style>
         """,
@@ -106,6 +109,9 @@ def _badge(value: str, language: str = "ko") -> str:
         "inferred": ui(language, "inferred"),
         "likely": ui(language, "inferred"),
         "hypothesis": "확인 필요 가설",
+        "candidate": "확인 필요 후보",
+        "partial": "일부 확인된 위치",
+        "unconfirmed": ui(language, "unknown"),
         "unknown": ui(language, "unknown"),
     }
     return f"<span class='v3-chip {state}'>{_safe(labels.get(state, state))}</span>"
@@ -147,10 +153,14 @@ def _compact_fact_value(item: object | None, kind: str) -> str:
         return match.group(1).strip() if match else claim
     if kind == "investment":
         values = re.findall(r"(?:VND|USD|US\$|\$)\s*(?:approx\.?\s*)?\d[\d.,–-]*\s*(?:trillion|billion|million|m|bn)?", claim, flags=re.IGNORECASE)
-        return " / ".join(dict.fromkeys(value.strip() for value in values)) or claim
+        return " / ".join(dict.fromkeys(value.strip() for value in values)) or "Not identified"
     if kind == "scale":
-        match = re.search(r"~?\s*[\d.,]+\s*(?:hectares?|ha|sqm|m2|m²|평)", claim, flags=re.IGNORECASE)
-        return match.group(0).strip() if match else claim
+        match = re.search(
+            r"~?\s*[\d.,]+\s*(?:hectares?|ha|sqm|m2|m²|평|units?|lines?|beds?|tons?|mw|gw)",
+            claim,
+            flags=re.IGNORECASE,
+        )
+        return match.group(0).strip() if match else "Not identified"
     return claim
 
 
@@ -186,6 +196,10 @@ def _user_copy(value: object) -> str:
 
 def _evidence_label(value: object) -> str:
     status = _display_value(value).lower()
+    if status == "partial":
+        return "일부 확인"
+    if status == "unconfirmed":
+        return "미확인"
     return {
         "confirmed": "확인된 근거",
         "likely": "정황상 유력",
@@ -207,42 +221,117 @@ def _actor_for(result: BDV3AnalysisResult, aliases: tuple[str, ...]) -> object |
     )
 
 
-def _source_popover(item: object | None, *, hypothesis: str = "", summary_label: str = "i", need: bool = False) -> str:
+def _source_label_from_url(url: str) -> str:
+    host = (urlparse(url).hostname or "").removeprefix("www.")
+    return host or "원문 출처"
+
+
+def _best_legacy_source_label(url: str, labels: list[str], used: set[int]) -> str:
+    host = (urlparse(url).hostname or "").removeprefix("www.")
+    host_parts = [part for part in host.split(".") if part not in {"com", "org", "net", "gov", "vn"}]
+    candidates: list[tuple[int, int, int, str]] = []
+    for index, label in enumerate(labels):
+        compact = re.sub(r"[^a-z0-9]", "", label.casefold())
+        if index in used:
+            continue
+        for part in host_parts:
+            if not part or part not in compact:
+                continue
+            rank = 0 if compact == part else 1 if compact.startswith(part) else 2
+            candidates.append((rank, len(label), index, label))
+            break
+    if candidates:
+        _rank, _length, index, label = min(candidates)
+        used.add(index)
+        return label
+    return _source_label_from_url(url)
+
+
+def _source_rows(labels: list[str], urls: list[str], dates: list[str]) -> tuple[list[str], list[tuple[str, str, str]]]:
+    """Return rules and source rows while repairing legacy unpaired provenance."""
+    clean_labels = [str(label).strip() for label in labels if str(label).strip()]
+    rules = [label.removeprefix("rule:") for label in clean_labels if label.startswith("rule:")]
+    source_labels = [label for label in clean_labels if not label.startswith("rule:")]
+    aligned = len(clean_labels) == len(urls) and all(
+        not label.startswith("rule:") or not str(urls[index]).strip()
+        for index, label in enumerate(clean_labels)
+    )
+    rows: list[tuple[str, str, str]] = []
+    if aligned:
+        for index, label in enumerate(clean_labels):
+            if label.startswith("rule:"):
+                continue
+            rows.append((label, str(urls[index]).strip(), str(dates[index]).strip() if index < len(dates) else ""))
+        return rules, rows
+
+    # Older saved results flattened labels and URLs independently. In that
+    # shape, URL order is still reliable but label index is not. Match a
+    # publisher label by URL host and suppress duplicate attribution variants.
+    used: set[int] = set()
+    seen_urls: set[str] = set()
+    for index, value in enumerate(urls):
+        url = str(value).strip()
+        if not url.startswith(("https://", "http://")) or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        label = _best_legacy_source_label(url, source_labels, used)
+        date = str(dates[index]).strip() if index < len(dates) else ""
+        rows.append((label, url, date))
+    if not rows:
+        rows.extend((label, "", str(dates[index]).strip() if index < len(dates) else "") for index, label in enumerate(source_labels))
+    return rules, rows
+
+
+def _source_popover(item: object | None, *, hypothesis: object | None = None, summary_label: str = "i", need: bool = False) -> str:
     labels = list(getattr(item, "source_labels", []) or getattr(item, "evidence_labels", []) or [])
     urls = list(getattr(item, "source_urls", []) or [])
     dates = list(getattr(item, "source_dates", []) or [])
     status = _evidence_label(getattr(item, "credibility", None) or getattr(item, "status", None))
-    claim = _short(getattr(item, "claim", ""), 220)
+    _rules, sources = _source_rows(labels, urls, dates)
     rows = []
-    count = max(len(labels), len(urls), len(dates))
-    for index in range(count):
-        label = labels[index] if index < len(labels) else f"Source {index + 1}"
-        date = dates[index] if index < len(dates) else ""
-        url = urls[index] if index < len(urls) else ""
+    for label, url, date in sources:
+        if not str(url).startswith(("https://", "http://")):
+            continue
         date_html = f"<span class='v3-source-date'>{_safe(date)}</span>" if date else ""
-        if str(url).startswith(("https://", "http://")):
-            source_html = f"<a href='{html.escape(str(url), quote=True)}' target='_blank' rel='noopener noreferrer'>{_safe(label)}</a>"
-        else:
-            source_html = f"<span>{_safe(label)}</span>"
+        source_html = f"<a href='{html.escape(str(url), quote=True)}' target='_blank' rel='noopener noreferrer'>{_safe(label)}</a>"
         rows.append(f"<div class='v3-source-row'>{source_html}{date_html}</div>")
     if not rows:
         rows.append("<div class='v3-source-row'>확인 가능한 원문 링크가 없습니다.</div>")
-    claim_html = f"<div class='v3-source-row'><b>근거 요약</b><br>{_safe(claim)}</div>" if claim else ""
-    hypothesis_html = f"<div class='v3-hypothesis'><b>참고 가설 · 추가 확인 필요</b>{_safe(hypothesis)}</div>" if hypothesis else ""
+    hypothesis_html = ""
+    if hypothesis is not None:
+        hypothesis_claim = _short(getattr(hypothesis, "claim", ""), 200)
+        hypothesis_labels = list(getattr(hypothesis, "source_labels", []) or getattr(hypothesis, "evidence_labels", []) or [])
+        hypothesis_urls = list(getattr(hypothesis, "source_urls", []) or [])
+        hypothesis_dates = list(getattr(hypothesis, "source_dates", []) or [])
+        _hypothesis_rules, hypothesis_sources = _source_rows(hypothesis_labels, hypothesis_urls, hypothesis_dates)
+        hypothesis_links = []
+        for label, url, date in hypothesis_sources:
+            if not str(url).startswith(("https://", "http://")):
+                continue
+            date_html = f"<span class='v3-source-date'>{_safe(date)}</span>" if date else ""
+            hypothesis_links.append(
+                f"<div class='v3-hypothesis-source'><a href='{html.escape(str(url), quote=True)}' target='_blank' rel='noopener noreferrer'>{_safe(label)}</a>{date_html}</div>"
+            )
+        if hypothesis_claim and hypothesis_links:
+            hypothesis_html = (
+                f"<div class='v3-hypothesis'><b>확인해볼 단서</b>{_safe(hypothesis_claim)}"
+                f"{''.join(hypothesis_links)}</div>"
+            )
     css_class = "v3-need" if need else "v3-source"
     return (
         f"<details class='{css_class}'><summary>{_safe(summary_label)}</summary><div class='v3-popover'>"
-        f"<div class='v3-popover-title'>{_safe(status)}</div>{claim_html}{''.join(rows)}{hypothesis_html}</div></details>"
+        f"<div class='v3-popover-title'>{_safe(status)}</div>{''.join(rows)}{hypothesis_html}</div></details>"
     )
 
 
-def _hypothesis_for(result: BDV3AnalysisResult, keywords: tuple[str, ...]) -> str:
+def _hypothesis_for(result: BDV3AnalysisResult, keywords: tuple[str, ...]) -> object | None:
     intelligence = result.v2_snapshot.project_intelligence
     candidate = _matching_fact([*intelligence.ecosystem_candidates, *intelligence.historical_projects], keywords)
-    return _short(getattr(candidate, "claim", ""), 200) if candidate else ""
+    source_urls = list(getattr(candidate, "source_urls", []) or []) if candidate else []
+    return candidate if any(str(url).startswith(("https://", "http://")) for url in source_urls) else None
 
 
-def _kv(label: str, value: object, item: object | None, *, hypothesis: str = "") -> str:
+def _kv(label: str, value: object, item: object | None, *, hypothesis: object | None = None) -> str:
     return (
         "<div class='v3-kv'>"
         f"<div class='v3-kv-label-row'><div class='v3-kv-label'>{_safe(label)}</div>{_source_popover(item, hypothesis=hypothesis)}</div>"
@@ -250,39 +339,276 @@ def _kv(label: str, value: object, item: object | None, *, hypothesis: str = "")
     )
 
 
+LOCATION_PRECISION_LABELS = {
+    "exact_site": "정확한 부지 수준까지 위치 확인",
+    "industrial_park": "산업단지 수준까지 위치 확인",
+    "district": "District 수준까지 위치 확인",
+    "city": "도시 수준까지 위치 확인",
+    "province": "성·광역 지역 수준까지 위치 확인",
+    "region": "권역 수준까지 위치 확인",
+    "country": "국가 수준까지 위치 확인",
+    "unknown": "위치 수준 미확인",
+}
+
+
+def _location_title(location: ProjectLocation) -> str:
+    return next((
+        value for value in (
+            location.site_name,
+            location.address,
+            location.industrial_park,
+            location.district,
+            location.city,
+            location.province,
+            location.region,
+            location.country,
+        ) if value
+    ), "프로젝트 부지 위치 미확인")
+
+
+def _location_place(location: ProjectLocation, title: str) -> str:
+    values = [
+        location.address,
+        location.industrial_park,
+        location.district,
+        location.city,
+        location.province,
+        location.region,
+        location.country,
+    ]
+    return ", ".join(dict.fromkeys(
+        value for value in values if value and value.casefold() != title.casefold()
+    ))
+
+
+def _location_map_rows(location: ProjectLocation) -> list[dict[str, float]]:
+    if location.status == "unknown" or location.latitude is None or location.longitude is None:
+        return []
+    return [{"lat": float(location.latitude), "lon": float(location.longitude)}]
+
+
+def _location_zoom(location: ProjectLocation) -> int:
+    return {
+        "exact_site": 14,
+        "industrial_park": 11,
+        "district": 10,
+        "city": 9,
+        "province": 7,
+        "region": 6,
+        "country": 4,
+        "unknown": 4,
+    }.get(location.precision, 7)
+
+
+def _location_search_query(location: ProjectLocation) -> str:
+    return ", ".join(dict.fromkeys(
+        value for value in (
+            location.address,
+            location.site_name,
+            location.industrial_park,
+            location.district,
+            location.city,
+            location.province,
+            location.country,
+        ) if value
+    ))
+
+
+def _site_location_card(location: ProjectLocation) -> None:
+    with st.container(key="v3_site_location"):
+        st.markdown("<div class='v3-site-label'>부지 위치</div>", unsafe_allow_html=True)
+        if location.status == "unknown":
+            st.markdown(
+                "<div class='v3-site-unknown'><strong>프로젝트 부지 위치가 아직 확인되지 않았습니다.</strong>"
+                "<span>확인된 위치 근거가 추가되면 지도와 함께 표시합니다.</span></div>",
+                unsafe_allow_html=True,
+            )
+            return
+
+        title = _location_title(location)
+        place = _location_place(location, title)
+        place_html = f"<div class='v3-site-place'>{_safe(place)}</div>" if place else ""
+        st.markdown(
+            f"<div class='v3-site-title'><span>📍</span><span>{_safe(title)}</span>{_source_popover(location)}</div>"
+            f"{place_html}<div class='v3-site-level'>{_safe(LOCATION_PRECISION_LABELS.get(location.precision, '위치 범위 확인'))}</div>",
+            unsafe_allow_html=True,
+        )
+        rows = _location_map_rows(location)
+        if rows:
+            st.map(
+                rows,
+                latitude="lat",
+                longitude="lon",
+                size=75,
+                zoom=_location_zoom(location),
+                width="stretch",
+                height=210,
+            )
+            st.markdown(
+                "<div class='v3-site-map-caption'>좌표 근거가 확인된 위치만 표시합니다. 부지 경계나 길찾기 정보는 제공하지 않습니다.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            query = _location_search_query(location)
+            if query:
+                st.iframe(
+                    f"https://www.google.com/maps?q={quote_plus(query)}&output=embed",
+                    height=210,
+                )
+                st.markdown(
+                    "<div class='v3-site-map-caption'>공개된 장소명을 기준으로 표시한 참고 위치입니다. 정확한 부지 좌표나 경계는 확인되지 않았습니다.</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    "<div class='v3-site-note'>지도에서 검색할 수 있는 위치명이 아직 확인되지 않았습니다.</div>",
+                    unsafe_allow_html=True,
+                )
+
+
+def _timeline_event_type(value: str) -> str:
+    text = value.casefold()
+    categories = (
+        ("planning_announcement", ("mou", "memorandum", "roadmap", "협약", "양해각서")),
+        ("investment", ("investment", "funding", "투자")),
+        ("site", ("site selected", "land allocation", "부지 확정")),
+        ("design", ("design release", "architect appointed", "design consultant", "설계 착수", "설계사 선정")),
+        ("permit", ("permit filed", "permit approved", "license granted", "인허가")),
+        ("contractor", ("epc appointed", "gc appointed", "contract awarded", "contractor appointed", "epc 선정", "시공사 선정")),
+        ("construction", ("groundbreaking", "construction start", "broke ground", "착공")),
+        ("operation", ("completed", "commissioned", "inaugurated", "준공", "가동", "개소")),
+    )
+    return next((name for name, markers in categories if any(marker in text for marker in markers)), "progress")
+
+
+def _timeline_source_rows(result: BDV3AnalysisResult, item: object) -> list[tuple[str, str, str]]:
+    labels = list(getattr(item, "evidence_labels", []) or [])
+    urls = list(getattr(item, "source_urls", []) or [])
+    dates = list(getattr(item, "source_dates", []) or [])
+    _rules, rows = _source_rows(labels, urls, dates)
+    linked = [row for row in rows if row[1].startswith(("https://", "http://"))]
+    if linked:
+        return linked
+
+    item_text = f"{getattr(item, 'milestone', '')} {' '.join(labels)}".casefold()
+    best_fact = None
+    best_score = 0
+    for fact in result.v2_snapshot.project_intelligence.current_project_facts:
+        fact_text = f"{fact.claim} {' '.join(fact.evidence_labels)}".casefold()
+        tokens = {token for token in re.findall(r"[a-z0-9가-힣]{3,}", item_text) if token not in {"project", "news", "vietnam"}}
+        score = sum(token in fact_text for token in tokens)
+        if score > best_score and any(str(url).startswith(("https://", "http://")) for url in fact.source_urls):
+            best_fact, best_score = fact, score
+    if best_fact is None:
+        return []
+    _rules, rows = _source_rows(best_fact.evidence_labels, best_fact.source_urls, best_fact.source_dates)
+    return [row for row in rows if row[1].startswith(("https://", "http://"))]
+
+
+def _public_progress_events(result: BDV3AnalysisResult) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    negative_markers = (
+        "no public evidence", "not disclosed", "not announced", "not confirmed",
+        "공개 근거 없음", "미공개", "확인되지",
+    )
+    background_markers = (
+        "existing/operational campus", "campus is operational", "general campus",
+        "시장 배경", "일반적인 캠퍼스",
+    )
+    for item in result.v2_snapshot.project_intelligence.project_timeline:
+        text = item.milestone.casefold()
+        campus_background = "campus" in text and any(marker in text for marker in ("operational", "opened previously", "existing facility"))
+        if campus_background or any(marker in text for marker in (*negative_markers, *background_markers)):
+            continue
+        key = (item.date_or_period, _timeline_event_type(item.milestone))
+        rows = _timeline_source_rows(result, item)
+        existing = grouped.get(key)
+        if existing is None:
+            grouped[key] = {
+                "date": item.date_or_period,
+                "milestone": item.milestone,
+                "credibility": item.credibility,
+                "sources": rows,
+            }
+            continue
+        existing_sources = list(existing["sources"])
+        seen_urls = {row[1] for row in existing_sources}
+        existing_sources.extend(row for row in rows if row[1] not in seen_urls)
+        existing["sources"] = existing_sources
+        if len(item.milestone) < len(str(existing["milestone"])):
+            existing["milestone"] = item.milestone
+    return sorted(grouped.values(), key=lambda event: str(event["date"]), reverse=True)[:5]
+
+
+def _rule_only_customer_need_claims(result: BDV3AnalysisResult) -> set[str]:
+    return {
+        evidence.claim
+        for evidence in result.v2_snapshot.context.customer_needs
+        if any(str(label).startswith("rule:") for label in evidence.source_labels)
+        and evidence.rationale.startswith("명시적 고객 니즈 키워드 감지")
+    }
+
+
 def _project_overview(result: BDV3AnalysisResult) -> None:
     intelligence = result.v2_snapshot.project_intelligence
-    timeline = intelligence.project_timeline[:3]
+    timeline = _public_progress_events(result)
     current_facts = intelligence.current_project_facts
-    location = _matching_fact(current_facts, ("site:", "location", "located", "province", "ward", "city"))
     investment = _matching_fact(current_facts, ("total investment", "capital", "capex", "usd", "vnd", "trillion", "million"))
     scale = _matching_fact(current_facts, ("capacity", "capa", "area", "hectare", "sqm", "m2", "규모", "면적", "생산량"))
     owner = _actor_for(result, ("owner", "developer"))
     building = result.v2_snapshot.context.building_type
     facts_html = "".join(
         [
-            _kv("위치", _compact_fact_value(location, "location"), location, hypothesis=_hypothesis_for(result, ("location", "province", "city"))),
             _kv("프로젝트 유형", result.building_type.value, building),
             _kv("사업주 / 개발사", intelligence.owner_summary or getattr(owner, "organization", None), owner),
             _kv("투자 규모", _compact_fact_value(investment, "investment"), investment, hypothesis=_hypothesis_for(result, ("investment", "capital", "capex"))),
-            _kv("프로젝트 규모", _compact_fact_value(scale, "scale"), scale, hypothesis=_hypothesis_for(result, ("capacity", "area", "hectare", "규모"))),
+            _kv("시설 / 생산 규모", _compact_fact_value(scale, "scale"), scale, hypothesis=_hypothesis_for(result, ("capacity", "area", "hectare", "규모"))),
         ]
     )
     if timeline:
-        timeline_html = "<div class='v3-timeline'>" + "".join(f"<div class='v3-milestone'><div class='v3-milestone-date'>{_safe(item.date_or_period or 'Not identified')}</div><div class='v3-milestone-name'>{_safe(item.milestone)}</div></div>" for item in timeline) + "</div>"
+        timeline_cards = []
+        for event in timeline:
+            source_links = " · ".join(
+                f"<a href='{html.escape(url, quote=True)}' target='_blank' rel='noopener noreferrer'>{_safe(label)}</a>"
+                for label, url, _date in list(event["sources"])[:3]
+            )
+            source_html = f"<div class='v3-milestone-sources'>{source_links}</div>" if source_links else ""
+            timeline_cards.append(
+                f"<div class='v3-milestone'><div class='v3-milestone-date'>{_safe(event['date'] or 'Not identified')}</div>"
+                f"<div class='v3-milestone-name'>{_safe(event['milestone'])}</div>{source_html}</div>"
+            )
+        timeline_html = (
+            "<div class='v3-timeline-head'><b>공개 확인된 진행 이력</b><span>동일 사건의 반복 보도는 하나로 묶었습니다.</span></div>"
+            f"<div class='v3-timeline'>{''.join(timeline_cards)}</div>"
+        )
     else:
         timeline_html = ""
     needs = []
-    for fact, evidence in zip(result.customer_needs[:3], result.v2_snapshot.context.customer_needs[:3]):
+    rule_only_claims = _rule_only_customer_need_claims(result)
+    for fact, evidence in zip(result.customer_needs, result.v2_snapshot.context.customer_needs):
+        if evidence.claim in rule_only_claims:
+            continue
         needs.append(_source_popover(evidence, summary_label=fact.value, need=True))
+        if len(needs) >= 3:
+            break
     needs_html = "<div class='v3-needs'><span class='v3-need-label'>고객이 해결하려는 과제</span>" + ("".join(needs) if needs else "<span class='v3-kv-value'>미확인</span>") + "</div>"
-    st.markdown(
-        "<div class='v3-overview'><div class='v3-overview-grid'><div>"
-        f"<div class='v3-label'>프로젝트 개요</div><div class='v3-project-name'>{_safe(result.opportunity_title)}</div>"
-        f"<div class='v3-project-summary'>{_safe(result.executive_summary)}</div><div class='v3-overview-facts'>{facts_html}</div>{needs_html}{timeline_html}"
-        "</div></div></div>",
-        unsafe_allow_html=True,
-    )
+    with st.container(key="v3_project_overview"):
+        st.markdown(
+            f"<div class='v3-overview-head'><div class='v3-label'>프로젝트 개요</div>"
+            f"<div class='v3-project-name'>{_safe(result.opportunity_title)}</div>"
+            f"<div class='v3-project-summary'>{_safe(result.executive_summary)}</div></div>",
+            unsafe_allow_html=True,
+        )
+        project_col, location_col = st.columns([2, 1], gap="large")
+        with project_col:
+            st.markdown(
+                f"<div class='v3-overview-facts'>{facts_html}</div>{needs_html}",
+                unsafe_allow_html=True,
+            )
+        with location_col:
+            _site_location_card(intelligence.project_location)
+        if timeline_html:
+            st.markdown(timeline_html, unsafe_allow_html=True)
 
 
 def _stage_index(value: str) -> int | None:
@@ -376,27 +702,105 @@ def _node_actor(result: BDV3AnalysisResult, node: object) -> object | None:
     return _actor_for(result, aliases)
 
 
+def _unknown_roles_for_stage(result: BDV3AnalysisResult) -> list[tuple[str, str]]:
+    stage_index = _stage_index(result.project_stage.value)
+    known_text = " ".join(
+        f"{node.role} {' '.join(node.roles)}" for node in result.relationship_map.nodes
+    ).casefold()
+    intelligence = result.v2_snapshot.project_intelligence
+    signal_text = " ".join([
+        *result.relationship_map.research_gaps,
+        *result.v2_snapshot.relationship_map.research_gaps,
+        *(item.claim for item in intelligence.current_project_facts),
+        *(item.claim for item in intelligence.open_scopes),
+    ]).casefold()
+
+    def contains_alias(haystack: str, alias: str) -> bool:
+        if re.fullmatch(r"[a-z0-9&/]{1,3}", alias):
+            return bool(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", haystack))
+        return alias in haystack
+
+    if stage_index is None or stage_index <= 1:
+        candidates = [
+            ("사업기획 / 실행 PM", "실행 로드맵 책임 조직", ("pm", "roadmap", "project management", "실행"), True),
+            ("설계 / Lab Engineering", "설계·통합 범위 책임 조직", ("architect", "design", "engineering", "integrator", "설계"), True),
+            ("EPC / GC", "건축·시공 범위가 있을 경우", ("epc", "gc", "contractor", "construction", "시공"), False),
+            ("FI / 투자자", "자금 조달·투자 승인 주체", ("investor", "investment", "funding", "capital", "capex", "투자"), False),
+            ("시설 운영 주체", "완공 후 운영 책임 조직", ("operator", "facility management", "operation", "운영"), True),
+            ("구매 / 사양 결정 주체", "Vendor shortlist와 기술 승인 책임", ("procurement", "specification", "purchasing", "구매", "사양"), True),
+        ]
+    elif stage_index <= 5:
+        candidates = [
+            ("PM / CM", "일정·범위 통합 책임", ("pm", "cm", "project management"), True),
+            ("Architect / Design", "설계와 사양 영향 주체", ("architect", "design", "설계"), True),
+            ("Engineering / Integrator", "기술 통합 책임", ("engineering", "integrator"), True),
+            ("EPC / GC", "시공·발주 책임", ("epc", "gc", "contractor", "시공"), True),
+            ("구매 / 사양 결정 주체", "Vendor shortlist와 기술 승인 책임", ("procurement", "specification", "구매", "사양"), True),
+        ]
+    elif stage_index <= 7:
+        candidates = [
+            ("EPC / GC", "잔여 발주·변경 범위 책임", ("epc", "gc", "contractor"), True),
+            ("MEP", "설비 패키지 책임", ("mep",), True),
+            ("구매 조직", "미발주 패키지와 Vendor 선정", ("procurement", "purchasing", "구매"), True),
+            ("Vendor / Supplier", "주요 장비·솔루션 공급", ("vendor", "supplier", "공급"), True),
+            ("현장 운영 책임자", "현장 요구·변경 승인", ("site manager", "site operation", "현장"), True),
+        ]
+    else:
+        candidates = [
+            ("Operator", "시설 운영 책임", ("operator", "operation", "운영"), True),
+            ("O&M", "유지보수 책임", ("o&m", "maintenance", "유지보수"), True),
+            ("Facility Management", "시설 성능·서비스 책임", ("facility management", "fm"), True),
+            ("Retrofit 결정 주체", "개보수 투자 승인", ("retrofit", "renovation", "개보수"), True),
+        ]
+
+    ranked = []
+    for order, (role, note, aliases, always) in enumerate(candidates):
+        if any(contains_alias(known_text, alias) for alias in aliases):
+            continue
+        signal_count = sum(contains_alias(signal_text, alias) for alias in aliases)
+        if not always and not signal_count:
+            continue
+        ranked.append((-signal_count, order, role, note))
+    ranked.sort()
+    return [(role, note) for _score, _order, role, note in ranked[:5]]
+
+
 def _relationship_map(result: BDV3AnalysisResult, language: str) -> None:
     relmap = result.relationship_map
     _section(ui(language, "relationship_map"), f"사업 구조 · {_evidence_label(relmap.status)}")
-    if not relmap.nodes:
-        st.info("현재 정보만으로 사업 구조를 확정하기 어렵습니다. 확인되지 않은 회사는 표시하지 않았습니다.")
+    unknown_roles = _unknown_roles_for_stage(result)
+    if not relmap.nodes and not unknown_roles:
+        st.info("현재 정보만으로 사업 구조와 확인할 핵심 역할을 정하기 어렵습니다.")
         return
-    confirmed_count = sum(node.status == "confirmed" for node in relmap.nodes)
-    unknown_nodes = [node for node in relmap.nodes if _display_value(node.company) == "Not identified"]
-    next_check = result.v2_snapshot.relationship_map.unknown_critical_actors[0] if result.v2_snapshot.relationship_map.unknown_critical_actors else (unknown_nodes[0].role if unknown_nodes else "추가로 확인할 핵심 관계자 없음")
+    confirmed_count = sum(node.status in {"confirmed", "likely"} for node in relmap.nodes)
+    next_check = unknown_roles[0][0] if unknown_roles else "추가로 확인할 핵심 역할 없음"
     st.markdown(
-        f"<div class='v3-map-summary'><span>확인된 관계자 <b>{confirmed_count}명</b></span><span>미확인 관계자 <b>{len(unknown_nodes)}명</b></span><span class='v3-map-next'><b>다음 확인 대상</b> · {_safe(next_check)}</span></div>",
+        f"<div class='v3-map-summary'><span>확인된 관계자 <b>{confirmed_count}명</b></span><span>아직 확인되지 않은 역할 <b>{len(unknown_roles)}개</b></span><span class='v3-map-next'><b>다음 확인 대상</b> · {_safe(next_check)}</span></div>",
         unsafe_allow_html=True,
     )
     width, node_w, node_h = 960, 222, 82
-    max_layer = max(node.layer for node in relmap.nodes)
-    height = max(400, 112 + max_layer * 128)
+    max_layer = max((node.layer for node in relmap.nodes), default=0)
     x_positions = {"LEFT": 145, "CENTER": 480, "RIGHT": 815}
     coords: dict[str, tuple[int, int]] = {}
     for node in relmap.nodes:
         coords[node.node_id] = (x_positions.get(node.position.upper(), 480), 50 + (node.layer - 1) * 128)
+    real_bottom = max((y + node_h for _x, y in coords.values()), default=42)
+    unknown_start_y = real_bottom + 96 if unknown_roles else real_bottom
+    unknown_rows = (len(unknown_roles) + 2) // 3
+    height = max(400, unknown_start_y + unknown_rows * 112 + 44)
     svg = [f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" aria-label="Project relationship map">', '<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#707070"/></marker></defs>']
+    for layer_type, label, fill in (("corporate", "Corporate Layer", "#f6f8fc"), ("project", "Project Layer", "#fbfcfe")):
+        layer_nodes = [node for node in relmap.nodes if node.layer_type == layer_type]
+        if not layer_nodes:
+            continue
+        first_y = min(coords[node.node_id][1] for node in layer_nodes)
+        last_y = max(coords[node.node_id][1] for node in layer_nodes) + node_h
+        svg.append(f'<rect x="12" y="{first_y-34}" width="936" height="{last_y-first_y+50}" rx="18" fill="{fill}"/>')
+        svg.append(f'<text x="32" y="{first_y-12}" font-size="12" font-weight="700" fill="#66748f">{label}</text>')
+    if unknown_roles:
+        ghost_height = unknown_rows * 112 + 18
+        svg.append(f'<rect x="12" y="{unknown_start_y-34}" width="936" height="{ghost_height}" rx="18" fill="#fafafa" stroke="#c9cdd4" stroke-dasharray="7 6"/>')
+        svg.append(f'<text x="32" y="{unknown_start_y-12}" font-size="12" font-weight="700" fill="#777">아직 확인되지 않은 역할 · 현재 사업단계 기준</text>')
     for edge in relmap.relations:
         if edge.from_node not in coords or edge.to_node not in coords:
             continue
@@ -412,25 +816,36 @@ def _relationship_map(result: BDV3AnalysisResult, language: str) -> None:
         mid_x, mid_y = (x1 + x2) / 2, (start_y + end_y) / 2
         svg.append(f'<path d="M{x1},{start_y} C{x1},{mid_y} {x2},{mid_y} {x2},{end_y}" fill="none" stroke="#7890bd" stroke-width="1.7"{dash}{arrows}/>')
         svg.append(f'<rect x="{mid_x-58}" y="{mid_y-10}" width="116" height="20" rx="10" fill="#f7f9fd"/><text x="{mid_x}" y="{mid_y+4}" text-anchor="middle" font-size="10" font-weight="600" fill="#66748f">{_safe(edge.label)}</text>')
-    palette = {"confirmed": ("#eef5ff", "#3566d6", "#d7e4ff"), "inferred": ("#fff8e8", "#a66b00", "#f0dfb4"), "likely": ("#fff8e8", "#a66b00", "#f0dfb4"), "unknown": ("#f6f7f9", "#7a8495", "#e0e4e9")}
+    palette = {"confirmed": ("#eef5ff", "#3566d6", "#d7e4ff"), "inferred": ("#fff8e8", "#a66b00", "#f0dfb4"), "likely": ("#fff8e8", "#a66b00", "#f0dfb4"), "candidate": ("#f6f7f9", "#7a8495", "#e0e4e9"), "unknown": ("#f6f7f9", "#7a8495", "#e0e4e9")}
     for node in relmap.nodes:
         x, y = coords[node.node_id]; left = x - node_w / 2
         bg, accent, border = palette.get(node.status, palette["unknown"])
-        actor = _node_actor(result, node)
-        scope = _display_label(getattr(actor, "temporal_scope", None))
+        scope = _display_label(getattr(node, "organization_scope", "unknown")).replace("_", " ").title()
         role, company = _safe(node.role), _safe(_display_label(node.company))
         node_status = _evidence_label(node.status)
-        svg.append(f'<g><rect x="{left}" y="{y}" width="{node_w}" height="{node_h}" rx="20" fill="#fff" stroke="{border}"/><rect x="{left}" y="{y}" width="5" height="{node_h}" rx="3" fill="{accent}"/><circle cx="{left+27}" cy="{y+27}" r="15" fill="{bg}"/><text x="{left+27}" y="{y+31}" text-anchor="middle" font-size="10" font-weight="700" fill="{accent}">{role[:2].upper()}</text><text x="{left+51}" y="{y+24}" font-size="11" font-weight="700" fill="#707070">{role}</text><text x="{left+205}" y="{y+24}" text-anchor="end" font-size="10" font-weight="700" fill="#707070">{_safe(scope)}</text><text x="{left+51}" y="{y+46}" font-size="14" font-weight="700" fill="#000">{company[:24]}</text><rect x="{left+51}" y="{y+56}" width="88" height="18" rx="9" fill="{bg}"/><text x="{left+95}" y="{y+69}" text-anchor="middle" font-size="10" font-weight="700" fill="{accent}">{_safe(node_status)}</text></g>')
+        svg.append(f'<g><rect x="{left}" y="{y}" width="{node_w}" height="{node_h}" rx="20" fill="#fff" stroke="{border}"/><rect x="{left}" y="{y}" width="5" height="{node_h}" rx="3" fill="{accent}"/><circle cx="{left+27}" cy="{y+27}" r="15" fill="{bg}"/><text x="{left+27}" y="{y+31}" text-anchor="middle" font-size="10" font-weight="700" fill="{accent}">{company[:2].upper()}</text><text x="{left+51}" y="{y+25}" font-size="14" font-weight="700" fill="#000">{company[:24]}</text><text x="{left+51}" y="{y+46}" font-size="10.5" font-weight="650" fill="#66748f">{role[:29]}</text><text x="{left+51}" y="{y+68}" font-size="10" font-weight="600" fill="#7a8495">{_safe(scope)} · {_safe(node_status)}</text></g>')
+    ghost_x_positions = (160, 480, 800)
+    for index, (role, note) in enumerate(unknown_roles):
+        x = ghost_x_positions[index % 3]
+        y = unknown_start_y + (index // 3) * 112
+        left = x - node_w / 2
+        svg.append(
+            f'<g><rect x="{left}" y="{y}" width="{node_w}" height="{node_h}" rx="20" fill="#fff" stroke="#aeb4bd" stroke-dasharray="6 5"/>'
+            f'<circle cx="{left+27}" cy="{y+27}" r="15" fill="#f1f2f4"/><text x="{left+27}" y="{y+31}" text-anchor="middle" font-size="12" font-weight="700" fill="#777">?</text>'
+            f'<text x="{left+51}" y="{y+26}" font-size="13" font-weight="700" fill="#555">{_safe(role[:28])}</text>'
+            f'<text x="{left+51}" y="{y+48}" font-size="10" font-weight="600" fill="#777">회사 미확인</text>'
+            f'<text x="{left+51}" y="{y+67}" font-size="9.5" fill="#888">{_safe(note[:32])}</text></g>'
+        )
     svg.append("</svg>")
-    legend = f"<div class='v3-map-legend'><span><i style='background:#3566d6'></i>{ui(language, 'confirmed')}</span><span><i style='background:#d99a27'></i>{ui(language, 'inferred')}</span><span><i style='background:#a5adba'></i>{ui(language, 'unknown')}</span></div>"
+    legend = f"<div class='v3-map-legend'><span><i style='background:#3566d6'></i>{ui(language, 'confirmed')}</span><span><i style='background:#d99a27'></i>{ui(language, 'inferred')}</span><span><i style='background:#a5adba'></i>아직 확인되지 않은 역할</span></div>"
     st.markdown("<div class='v3-map-shell'>" + legend + "".join(svg) + "</div>", unsafe_allow_html=True)
     st.caption(f"사업 구조: {relmap.structure_name} · 근거 수준: {_evidence_label(relmap.status)}")
     with st.expander(ui(language, "relationship_evidence")):
         for node in relmap.nodes:
             actor = _node_actor(result, node)
             company = _display_label(node.company)
-            scope = _display_label(getattr(actor, "temporal_scope", None))
-            st.markdown(f"- **{node.role} / {company}** · {_evidence_label(node.status)} · {scope}")
+            scope = _display_label(getattr(node, "organization_scope", "unknown")).replace("_", " ").title()
+            st.markdown(f"- **{company}** · {node.role} · {scope} · {_evidence_label(node.status)}")
             labels = list(getattr(actor, "evidence_labels", []) or [])
             urls = list(getattr(actor, "source_urls", []) or [])
             for index, url in enumerate(urls[:3]):
@@ -462,7 +877,10 @@ def render_page_1_opportunity_v3(result: BDV3AnalysisResult, language: str = "ko
         st.markdown(f"**판단 근거 요약**  \n{result.status_reason}")
         if decision.context_basis:
             st.markdown("**판단에 사용한 정보**")
+            rule_only_claims = _rule_only_customer_need_claims(result)
             for item in decision.context_basis:
+                if item in rule_only_claims:
+                    continue
                 st.markdown(f"- {item}")
         source_count = 0
         for evidence in result.evidence:
@@ -531,8 +949,13 @@ def render_page_3_meeting_v3(result: BDV3AnalysisResult, language: str = "ko") -
         for item in result.talking_points:
             st.markdown(f"<div class='v3-talk'><b>{_safe(item.product)}</b><p>{_safe(_user_copy(item.scenario))}</p></div>", unsafe_allow_html=True)
     _section(ui(language, "top_signals"))
-    if result.customer_need_top_signals:
-        st.markdown("<div class='v3-signals'>" + "".join(f"<span class='v3-signal'>{_safe(_display_label(item.value))}</span>" for item in result.customer_need_top_signals) + "</div>", unsafe_allow_html=True)
+    hidden_rule_only_needs = _rule_only_customer_need_claims(result)
+    visible_need_signals = [
+        item for item in result.customer_need_top_signals
+        if item.value not in hidden_rule_only_needs
+    ]
+    if visible_need_signals:
+        st.markdown("<div class='v3-signals'>" + "".join(f"<span class='v3-signal'>{_safe(_display_label(item.value))}</span>" for item in visible_need_signals) + "</div>", unsafe_allow_html=True)
     else:
         st.info("확인된 고객 과제 신호가 없습니다.")
     _section(ui(language, "products"), "고객 과제와 프로젝트 맥락 기준")

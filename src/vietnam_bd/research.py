@@ -16,6 +16,7 @@ from .research_models import (
     ContextReadiness,
     EvidenceSource,
     QuickResearchResult,
+    ResearchProjectLocation,
     ResearchBundle,
     ResearchEvidence,
     ResearchRoundResult,
@@ -27,6 +28,7 @@ from .research_contribution import (
     record_round_research_contribution,
 )
 from .telemetry import measured_step, record_ai_response, record_retry
+from .relationship_taxonomy import normalize_relationship_type
 
 from .context_interpreter import (
     combine_rule_and_ai_context,
@@ -184,12 +186,16 @@ Your objective is to determine enough factual context to decide:
 4. What customer needs are explicitly or contextually visible?
 5. What is already known about the project decision ecosystem?
 6. Is this opportunity early enough to justify deeper research?
+7. What is the most specific project site location directly supported by evidence?
+8. What project-specific public milestones are visible across past and recent news?
 
 RESEARCH PRINCIPLES
 
 - Search beyond the user's original URL or text.
 - Use the input only as a starting clue.
 - Search the company, project, location and related recent announcements.
+- Search backward for earlier official announcements and reliable news that show
+  how this exact project progressed over time.
 - Prefer primary sources, company announcements, government sources,
   industrial park sources and reliable business media.
 - Pay special attention to TIME.
@@ -205,8 +211,18 @@ does NOT mean the project is currently under construction.
   unknown
 
 - Do not invent EPC, GC, architect, consultant, owner or vendor names.
+- Do not infer a specific industrial park, address, or coordinate from province-level context.
+- Populate project_location only from explicit source statements.
+- Use precision=exact_site only for an explicit project address/site, industrial_park
+  only when the source names that park, and partial for district/city/province/country.
+- Include latitude/longitude only when coordinates are explicitly present in a source
+  or verified source metadata. Put that support in coordinate_evidence.
 - If the current project ecosystem is not publicly confirmed,
   leave it unknown.
+- Treat one real-world event reported by multiple sources as one milestone.
+  Keep all supporting source URLs, but do not repeat paraphrases of the event.
+- Timeline evidence must be specific to this project. Do not treat general campus,
+  company or market history as project progress.
 - Keep this phase lightweight.
 - Do NOT yet conduct extensive historical EPC or peer benchmark research.
 - Return valid JSON only.
@@ -243,6 +259,20 @@ Focus on information required to classify:
 - building/project type
 - current business/project stage
 - business structure / ecosystem
+- project site location, using the most specific directly supported level
+- public project chronology: earliest announcement, MoU, planning, site, design,
+  permit, contractor award, construction, procurement, completion and operation
+
+For project_location, search and structure these levels without guessing:
+
+- exact project site or address
+- industrial park / industrial zone
+- district / city
+- province / region
+- country
+
+Vietnamese location terms may include industrial park, industrial zone, IP, IZ,
+factory site, plant site, project site, khu cong nghiep, province, and district.
 
 Especially determine whether the project appears to be:
 
@@ -295,6 +325,8 @@ def _all_quick_evidence(result: QuickResearchResult) -> list[ResearchEvidence]:
         *result.building_type_signals,
         *result.business_structure_signals,
         *result.recent_project_signals,
+        *result.project_location.evidence,
+        *result.project_location.coordinate_evidence,
     ]
 
 
@@ -355,6 +387,19 @@ def _merge_evidence_lists(*groups: list[ResearchEvidence]) -> list[ResearchEvide
 
 
 def merge_quick_research(base: QuickResearchResult, supplement: QuickResearchResult) -> QuickResearchResult:
+    precision_rank = {
+        "unknown": 0, "country": 1, "region": 2, "province": 3,
+        "city": 4, "district": 5, "industrial_park": 6, "exact_site": 7,
+    }
+    status_rank = {"unknown": 0, "partial": 1, "confirmed": 2}
+
+    def location_score(location: ResearchProjectLocation) -> tuple[int, int, int, int]:
+        supported = sum(item.credibility in {"confirmed", "likely"} for item in location.evidence)
+        return int(supported > 0), precision_rank[location.precision], status_rank[location.status], supported
+
+    project_location = max(
+        (base.project_location, supplement.project_location), key=location_score,
+    )
     return QuickResearchResult(
         company=supplement.company or base.company,
         project_name=supplement.project_name or base.project_name,
@@ -364,6 +409,7 @@ def merge_quick_research(base: QuickResearchResult, supplement: QuickResearchRes
         building_type_signals=_merge_evidence_lists(base.building_type_signals, supplement.building_type_signals),
         business_structure_signals=_merge_evidence_lists(base.business_structure_signals, supplement.business_structure_signals),
         recent_project_signals=_merge_evidence_lists(base.recent_project_signals, supplement.recent_project_signals),
+        project_location=project_location,
         source_summary=list(dict.fromkeys(base.source_summary + supplement.source_summary)),
     )
 
@@ -464,24 +510,55 @@ def _attach_context_provenance(context, quick: QuickResearchResult):
     """Attach source metadata to the four final context axes after arbitration."""
 
     def enrich(item, evidence_group: list[ResearchEvidence]):
-        labels = list(dict.fromkeys(
-            value for evidence in evidence_group
-            for value in (evidence.source_name, *(source.name for source in evidence.sources)) if value
-        ))
-        urls = list(dict.fromkeys(
-            value for evidence in evidence_group
-            for value in (evidence.source_url, *(source.url for source in evidence.sources)) if value
-        ))
-        dates = list(dict.fromkeys(
-            source.published_date for evidence in evidence_group for source in evidence.sources if source.published_date
-        ))
+        # Keep each label, URL and publication date on the same row. Flattening
+        # these fields independently made rule labels point to unrelated URLs
+        # and left valid source names looking unlinked in the UI.
+        rows: dict[str, tuple[str, str, str]] = {}
+
+        def add_source(label: str, url: str = "", date: str = "") -> None:
+            clean_label = label.strip()
+            clean_url = url.strip()
+            clean_date = date.strip()
+            if not clean_label and not clean_url:
+                return
+            key = clean_url.casefold() or f"label:{clean_label.casefold()}"
+            current = rows.get(key)
+            if current is None:
+                rows[key] = (clean_label or clean_url, clean_url, clean_date)
+                return
+            current_label, current_url, current_date = current
+            best_label = current_label
+            if clean_label and (not current_label or len(clean_label) < len(current_label)):
+                best_label = clean_label
+            rows[key] = (best_label, current_url or clean_url, current_date or clean_date)
+
+        for evidence in evidence_group:
+            matching_date = next(
+                (
+                    source.published_date
+                    for source in evidence.sources
+                    if evidence.source_url and source.url == evidence.source_url and source.published_date
+                ),
+                "",
+            )
+            add_source(evidence.source_name, evidence.source_url, matching_date)
+            for source in evidence.sources:
+                add_source(source.name, source.url, source.published_date)
+
+        provenance = list(rows.values())
+        rule_labels = [label for label in item.source_labels if label.startswith("rule:")]
+        available = max(0, 10 - len(rule_labels))
+        provenance = provenance[:available]
+        labels = [*rule_labels, *(label for label, _url, _date in provenance)]
+        urls = [*("" for _label in rule_labels), *(url for _label, url, _date in provenance)]
+        dates = [*("" for _label in rule_labels), *(date for _label, _url, date in provenance)]
         conflicts = list(dict.fromkeys(
             evidence.claim for evidence in evidence_group if any(source.stance == "contradicts" for source in evidence.sources)
         ))
         return item.model_copy(update={
-            "source_labels": list(dict.fromkeys(item.source_labels + labels))[:10],
-            "source_urls": urls[:10],
-            "source_dates": dates[:10],
+            "source_labels": labels,
+            "source_urls": urls,
+            "source_dates": dates,
             "source_conflicts": conflicts[:5],
         })
 
@@ -496,6 +573,23 @@ def _attach_context_provenance(context, quick: QuickResearchResult):
 # =========================================================
 # 5. Deep Research
 # =========================================================
+
+RELATIONSHIP_TAXONOMY_GUIDANCE = """
+RELATIONSHIP DATA RULES
+
+- Treat entity identity, organization type, project roles, decision influence,
+  and relationships as separate concepts.
+- Populate organization_type and multi-value project_roles for every supported
+  organization. entity_type is deprecated compatibility data only.
+- Use canonical relationship_type values from the response schema. Keep source
+  wording in description and legal/document basis in relationship_basis.
+- An entity may have multiple roles. Never emit compound display roles such as
+  "Project Owner / Host" or "Technology / Co-development Partner".
+- HQ/local are organization_scope values, never project roles. Do not invent a
+  local entity from a Vietnam project location alone.
+- Entity, role and relationship confidence are independent. Candidate or
+  historical participation must not become a confirmed current role.
+"""
 
 DEEP_RESEARCH_SYSTEM = """
 You are a senior B2B opportunity research analyst.
@@ -519,12 +613,20 @@ You should look for:
    - production
    - project phase
 
-2. Historical projects by the same owner/company
+2. Public project progress chronology
+   - search past official announcements and reliable news about this exact project
+   - capture dated changes in stage, site, design, permit, award, construction,
+     procurement, completion or operation
+   - consolidate duplicate reporting of the same event into one event with
+     multiple source URLs
+   - exclude general company, campus or market history from the project timeline
+
+3. Historical projects by the same owner/company
    - previous factories
    - previous expansions
    - previous Vietnam or regional projects
 
-3. Project ecosystem
+4. Project ecosystem
    - architect
    - design consultant
    - PM/CM
@@ -532,11 +634,11 @@ You should look for:
    - GC
    - major engineering partners
 
-4. Historical ecosystem relationships
+5. Historical ecosystem relationships
    If the CURRENT project does not reveal EPC / GC / architect:
    research prior projects by the same owner.
 
-5. Candidate ecosystem
+6. Candidate ecosystem
    Candidate does NOT mean confirmed.
 
    Example logic:
@@ -547,10 +649,10 @@ You should look for:
    Such information must be labelled likely or hypothesis,
    never confirmed.
 
-6. Peer benchmark
+7. Peer benchmark
    Research comparable manufacturing projects when useful.
 
-7. Buying signals
+8. Buying signals
    - hiring
    - capacity expansion
    - tender activity
@@ -558,7 +660,7 @@ You should look for:
    - operational issues
    - schedule pressure
 
-8. Competitor / incumbent signals
+9. Competitor / incumbent signals
    only when public evidence exists.
 
 EVIDENCE RULES
@@ -578,7 +680,7 @@ insufficient evidence
 Never fabricate names, relationships, amounts or dates.
 
 Return valid JSON only.
-"""
+""" + RELATIONSHIP_TAXONOMY_GUIDANCE
 
 
 def build_deep_research_prompt(
@@ -607,6 +709,8 @@ Do not repeat the quick research unnecessarily.
 Go deeper into:
 
 - current project ecosystem
+- dated public progress history for this exact project, searching older as well as
+  recent official announcements and news
 - owner's historical projects
 - historical architect / EPC / GC relationships
 - peer benchmarks where useful
@@ -666,7 +770,7 @@ If there is no credible remaining opening, say so.
 Do not invent opportunities.
 
 Return valid JSON only.
-"""
+""" + RELATIONSHIP_TAXONOMY_GUIDANCE
 
 HISTORICAL_INTELLIGENCE_SYSTEM = """
 You are a B2B project researcher studying a closed project for future learning.
@@ -678,7 +782,7 @@ Architect or Design Consultant, EPC, GC, major Vendor or Solution Provider,
 investment size, key dates, procurement structure, historical project partners,
 and repeated owner-partner patterns. Clearly distinguish confirmed, likely,
 hypothesis, and unknown. Return valid JSON only.
-"""
+""" + RELATIONSHIP_TAXONOMY_GUIDANCE
 
 
 def limited_research(
@@ -743,7 +847,7 @@ active-pursuit recommendations for this project.
 
 ROUND_FOCUS = {
     "deep": (
-        "Current project, current stage, schedule, investment and current ecosystem",
+        "Current project, dated public progress history, current stage, schedule, investment and current ecosystem",
         "Owner history, prior EPC/GC/Architect relationships, useful peer benchmarks, and verification of current-project participation",
     ),
     "limited": (
@@ -868,8 +972,24 @@ def _round_prompt(
             "focus": item.focus,
             "new_evidence": item.new_evidence[:10],
             "discovered_entities": [
-                {"name": entity.name, "entity_type": entity.entity_type, "credibility": entity.credibility}
+                {
+                    "name": entity.name,
+                    "organization_type": entity.organization_type,
+                    "project_roles": entity.project_roles,
+                    "legacy_entity_type": entity.entity_type,
+                    "credibility": entity.credibility,
+                }
                 for entity in item.discovered_entities[:10]
+            ],
+            "discovered_relationships": [
+                {
+                    "from_entity": relation.from_entity,
+                    "to_entity": relation.to_entity,
+                    "relationship_type": relation.canonical_relationship_type or normalize_relationship_type(relation.relationship_type, relation.description)[0],
+                    "relationship_basis": relation.relationship_basis,
+                    "credibility": relation.credibility,
+                }
+                for relation in item.discovered_relationships[:10]
             ],
             "critical_gaps": [gap.topic for gap in item.research_gaps if gap.critical][:8],
             "follow_up_queries": [query.query for query in item.follow_up_queries[:6]],
@@ -916,10 +1036,14 @@ def _round_prompt(
 
 Research only this round's focus. Use previous discovered entities, gaps,
 follow-up queries and claims to verify. Return findings plus newly discovered
-entities, remaining gaps, bounded follow-up queries and claims requiring
-cross-check. A historical relationship alone must remain hypothesis and must not
-be stated as current-project participation. Include multiple sources per claim
-when available and mark contradicting sources. Do not exceed the query budget.
+entities, explicitly evidenced relationships, remaining gaps, bounded follow-up
+queries and claims requiring cross-check. Entity status and relationship status
+are independent: preserve a supported entity even when its relationship is not
+confirmed. Create a confirmed relationship only when a source directly supports
+both endpoints and the relationship type (for example, a signed MoU or awarded
+contract). A historical relationship alone must remain hypothesis and must not be
+stated as current-project participation. Include multiple sources per claim when
+available and mark contradicting sources. Do not exceed the query budget.
 """
 
 
@@ -936,7 +1060,8 @@ def iterative_research(
 ) -> tuple[DeepResearchResult, list[ResearchRoundResult]]:
     focuses = ROUND_FOCUS[mode]
     rounds: list[ResearchRoundResult] = []
-    known_entities: set[tuple[str, str]] = set()
+    known_entities: set[tuple[str, str, tuple[str, ...]]] = set()
+    known_relationships: set[tuple[str, str, str]] = set()
     known_evidence: set[str] = set()
     seen_queries: set[str] = set()
     used_query_budget = 0
@@ -987,14 +1112,30 @@ def iterative_research(
                 new_queries.append(query)
         result.follow_up_queries = new_queries
 
-        entity_keys = {(item.name.casefold(), item.entity_type) for item in result.discovered_entities}
+        entity_keys = {
+            (item.name.casefold(), item.organization_type, tuple(sorted(item.project_roles)))
+            for item in result.discovered_entities
+        }
+        relationship_keys = {
+            (
+                item.from_entity.casefold(),
+                item.to_entity.casefold(),
+                (item.canonical_relationship_type or normalize_relationship_type(item.relationship_type, item.description)[0]).casefold(),
+            )
+            for item in result.discovered_relationships
+        }
         evidence_keys = {re.sub(r"\s+", " ", item.claim.strip().casefold()) for item in _deep_evidence(result.findings)}
         result.new_evidence = [
             item.claim for item in _deep_evidence(result.findings)
             if re.sub(r"\s+", " ", item.claim.strip().casefold()) not in known_evidence
         ][:20]
-        has_new_information = bool((entity_keys - known_entities) or (evidence_keys - known_evidence))
+        has_new_information = bool(
+            (entity_keys - known_entities)
+            or (relationship_keys - known_relationships)
+            or (evidence_keys - known_evidence)
+        )
         known_entities.update(entity_keys)
+        known_relationships.update(relationship_keys)
         known_evidence.update(evidence_keys)
         rounds.append(result)
         _emit_progress(

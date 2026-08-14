@@ -7,7 +7,14 @@ from pydantic import BaseModel, Field
 from .models import BDV2AnalysisResult, EvidenceItem
 
 
-V3EvidenceStatus = Literal["confirmed", "inferred", "unknown"]
+V3EvidenceStatus = Literal["confirmed", "likely", "candidate", "inferred", "unknown"]
+# Persisted BD v3 records span both the original status vocabulary
+# ("inferred") and the entity-first relationship map vocabulary
+# ("partial" / "unconfirmed"). Keep all values readable so shared history
+# survives schema upgrades.
+V3RelationshipMapStatus = Literal[
+    "confirmed", "inferred", "partial", "unconfirmed", "unknown"
+]
 V3Strength = Literal["strong", "medium", "weak"]
 
 
@@ -19,8 +26,15 @@ class V3ProjectFact(BaseModel):
 
 class V3StructureNode(BaseModel):
     node_id: str
+    entity_id: str | None = None
     role: str
+    roles: list[str] = Field(default_factory=list, max_length=12)
     company: str | None = None
+    organization_type: str = "UNKNOWN"
+    organization_scope: str = "unknown"
+    layer_type: Literal["corporate", "project"] = "project"
+    role_statuses: dict[str, str] = Field(default_factory=dict)
+    temporal_scope: Literal["current", "historical", "candidate", "unknown"] = "unknown"
     layer: int
     position: str
     required: bool
@@ -35,6 +49,9 @@ class V3StructureRelation(BaseModel):
     line_type: str
     direction: str
     label: str
+    relationship_basis: str = ""
+    description: str = ""
+    temporal_scope: Literal["current", "historical", "candidate", "unknown"] = "unknown"
     status: V3EvidenceStatus = "unknown"
     evidence: list[str] = Field(default_factory=list)
 
@@ -42,10 +59,11 @@ class V3StructureRelation(BaseModel):
 class V3RelationshipMap(BaseModel):
     structure_id: str | None = None
     structure_name: str = "Not confirmed"
-    status: V3EvidenceStatus = "unknown"
+    status: V3RelationshipMapStatus = "unconfirmed"
     evidence: list[str] = Field(default_factory=list)
     nodes: list[V3StructureNode] = Field(default_factory=list)
     relations: list[V3StructureRelation] = Field(default_factory=list)
+    research_gaps: list[str] = Field(default_factory=list, max_length=12)
 
 
 class V3StakeholderTarget(BaseModel):

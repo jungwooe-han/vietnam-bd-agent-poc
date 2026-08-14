@@ -29,9 +29,10 @@ from .research import (
     understand_seed,
 )
 from .research_contribution import record_quick_research_contribution, record_round_research_contribution
-from .research_models import DeepResearchResult, QuickResearchResult, ResearchBundle, ResearchRoundResult, SeedUnderstanding
+from .research_models import DeepResearchResult, QuickResearchResult, ResearchBundle, ResearchProjectLocation, ResearchRoundResult, SeedUnderstanding
 from .rule_engine import RuleEngineResult, evaluate_context
 from .telemetry import measured_step, record_firecrawl_call, record_firecrawl_scrape_outcome
+from .relationship_taxonomy import normalize_relationship_type
 
 
 FirecrawlFactory = Callable[[], FirecrawlClient]
@@ -49,6 +50,24 @@ def build_firecrawl_query(seed: str, understanding: SeedUnderstanding) -> str:
     ]
     unique = list(dict.fromkeys(value.strip() for value in values if value.strip()))
     return " ".join(f'"{value}"' if " " in value else value for value in unique[:8]) or seed
+
+
+def build_location_query(seed: str, understanding: SeedUnderstanding) -> str:
+    company = understanding.company.strip()
+    project = understanding.project.strip()
+    country_or_location = understanding.location.strip() or "Vietnam"
+    core = " ".join(f'"{value}"' for value in (company, project) if value)
+    return " ".join(filter(None, [
+        core or seed,
+        f'"{country_or_location}"',
+        "factory location plant site project site address",
+        '"industrial park" "industrial zone" IP IZ',
+        'province district "khu cong nghiep"',
+    ]))
+
+
+def location_needs_supplement(location: ResearchProjectLocation) -> bool:
+    return location.status != "confirmed" or location.precision not in {"exact_site", "industrial_park"}
 
 
 def _collect(
@@ -129,7 +148,8 @@ def _iterative_firecrawl_research(
     progress_callback: ProgressCallback | None,
 ) -> tuple[DeepResearchResult, list[ResearchRoundResult]]:
     rounds: list[ResearchRoundResult] = []
-    known_entities: set[tuple[str, str]] = set()
+    known_entities: set[tuple[str, str, tuple[str, ...]]] = set()
+    known_relationships: set[tuple[str, str, str]] = set()
     known_evidence: set[str] = set()
     used_queries = 0
     for index, focus in enumerate(ROUND_FOCUS[mode], start=1):
@@ -156,11 +176,27 @@ def _iterative_firecrawl_research(
             )
             record_round_research_contribution(f"{mode.title()} research round {index}: {focus}", result)
         result.round_number = index
-        entity_keys = {(item.name.casefold(), item.entity_type) for item in result.discovered_entities}
+        entity_keys = {
+            (item.name.casefold(), item.organization_type, tuple(sorted(item.project_roles)))
+            for item in result.discovered_entities
+        }
+        relationship_keys = {
+            (
+                item.from_entity.casefold(),
+                item.to_entity.casefold(),
+                (item.canonical_relationship_type or normalize_relationship_type(item.relationship_type, item.description)[0]).casefold(),
+            )
+            for item in result.discovered_relationships
+        }
         evidence_keys = {re.sub(r"\s+", " ", item.claim.strip().casefold()) for item in _deep_evidence(result.findings)}
         result.new_evidence = [item.claim for item in _deep_evidence(result.findings) if re.sub(r"\s+", " ", item.claim.strip().casefold()) not in known_evidence][:20]
-        has_new = bool((entity_keys - known_entities) or (evidence_keys - known_evidence))
+        has_new = bool(
+            (entity_keys - known_entities)
+            or (relationship_keys - known_relationships)
+            or (evidence_keys - known_evidence)
+        )
         known_entities.update(entity_keys)
+        known_relationships.update(relationship_keys)
         known_evidence.update(evidence_keys)
         rounds.append(result)
         _emit_progress(progress_callback, "research_round_complete", mode=mode, round=index, total_rounds=len(ROUND_FOCUS[mode]), discovered_entities=len(result.discovered_entities), remaining_gaps=len(result.research_gaps))
@@ -192,6 +228,31 @@ def research_opportunity_firecrawl(
     documents, known_urls = _collect(client, query, domains=PRIORITY_SOURCES, general=False)
     with measured_step("Primary context research"):
         quick = _structure_quick(seed=seed, extracted=extracted, user_context=user_context, understanding=understanding, documents=documents)
+    if location_needs_supplement(quick.project_location):
+        _emit_progress(progress_callback, "location_research_supplement")
+        location_query = build_location_query(seed, understanding)
+        location_documents, location_urls = _collect(
+            client, location_query, domains=None, general=True, exclude_urls=known_urls, limit=8,
+        )
+        known_urls.update(location_urls)
+        with measured_step("Supplementary project location research"):
+            location_supplement = _structure_quick(
+                seed=seed,
+                extracted=extracted,
+                user_context=user_context,
+                understanding=understanding,
+                documents=location_documents,
+                current=quick,
+                missing=[
+                    "project_location: find the most specific directly supported site level; "
+                    "never infer an industrial park or coordinates",
+                ],
+            )
+        quick = merge_quick_research(quick, location_supplement)
+        record_quick_research_contribution(
+            "Supplementary project location research", location_supplement,
+            primary_missing=["project_location"], missing_after=[],
+        )
     readiness = assess_context_readiness(understanding, quick)
     record_quick_research_contribution("Primary context research", quick)
     if not readiness.ready:

@@ -257,7 +257,100 @@ class ProjectRelationship(BaseModel):
         return _bounded_strings(value, 8)
 
 
+CanonicalStatus = Literal["confirmed", "likely", "candidate", "unknown"]
+OrganizationType = Literal[
+    "PUBLIC_INSTITUTION", "PRIVATE_COMPANY", "STATE_OWNED_ENTERPRISE",
+    "FINANCIAL_INSTITUTION", "INDUSTRIAL_PARK_DEVELOPER", "ENGINEERING_COMPANY",
+    "CONSTRUCTION_COMPANY", "TECHNOLOGY_COMPANY", "RESEARCH_INSTITUTION",
+    "OTHER", "UNKNOWN",
+]
+OrganizationScope = Literal[
+    "global_hq", "regional_hq", "local_entity", "project_company", "unknown"
+]
+ProjectRole = Literal[
+    "PROJECT_OWNER", "END_CLIENT", "INVESTOR", "SPONSOR", "DEVELOPER", "HOST",
+    "CO_DEVELOPMENT_PARTNER", "STRATEGIC_PARTNER", "ARCHITECT",
+    "ENGINEERING_CONSULTANT", "PM_CM", "EPC", "GENERAL_CONTRACTOR",
+    "MEP_CONTRACTOR", "TECHNOLOGY_PROVIDER", "SOLUTION_PROVIDER",
+    "EQUIPMENT_SUPPLIER", "VENDOR", "OPERATOR", "FACILITY_MANAGER",
+    "MAINTENANCE_PROVIDER", "GOVERNMENT_PARTNER", "REGULATORY_AUTHORITY",
+    "INDUSTRIAL_PARK", "LANDLORD", "OTHER",
+]
+DecisionDomain = Literal[
+    "PROJECT_GOVERNANCE", "BUDGET_INVESTMENT", "SITE_LAND", "DESIGN",
+    "TECHNICAL_SPECIFICATION", "EQUIPMENT_SELECTION", "VENDOR_SELECTION",
+    "PROCUREMENT", "CONSTRUCTION", "OPERATION", "REGULATORY_APPROVAL",
+    "PARTNERSHIP_APPROVAL",
+]
+InfluenceLevel = Literal["HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+CanonicalRelationshipType = Literal[
+    "OWNS", "INVESTS_IN", "SPONSORS", "AWARDS_CONTRACT_TO", "EPC_CONTRACT",
+    "DESIGN_CONTRACT", "SUPPLY_CONTRACT", "OM_CONTRACT", "CO_DEVELOPMENT",
+    "STRATEGIC_PARTNERSHIP", "MOU", "JOINT_VENTURE", "TECHNOLOGY_PROVISION",
+    "EQUIPMENT_SUPPLY", "SOLUTION_PROVISION", "HOSTS", "PROVIDES_LAND",
+    "LEASES_TO", "REGULATES", "APPROVES", "SUPERVISES", "SUBSIDIARY_OF",
+    "LOCAL_ARM_OF", "PARENT_OF", "LOCATED_IN", "OTHER",
+]
+
+
+class EntityIdentity(BaseModel):
+    entity_id: str
+    canonical_name: str
+    aliases: list[str] = Field(default_factory=list, max_length=10)
+    organization_type: OrganizationType = "UNKNOWN"
+    organization_scope: OrganizationScope = "unknown"
+    country: str = ""
+    website: str = ""
+    status: CanonicalStatus = "unknown"
+    evidence_labels: list[str] = Field(default_factory=list, max_length=8)
+    source_urls: list[str] = Field(default_factory=list, max_length=8)
+    source_dates: list[str] = Field(default_factory=list, max_length=8)
+    legacy_entity_types: list[str] = Field(default_factory=list, max_length=8)
+
+
+class ProjectParticipation(BaseModel):
+    project_id: str
+    entity_id: str
+    roles: list[ProjectRole] = Field(default_factory=list, max_length=12)
+    role_statuses: dict[str, CanonicalStatus] = Field(default_factory=dict)
+    temporal_scope: Literal["current", "historical", "candidate", "unknown"] = "unknown"
+    evidence_labels: list[str] = Field(default_factory=list, max_length=8)
+    source_urls: list[str] = Field(default_factory=list, max_length=8)
+    source_dates: list[str] = Field(default_factory=list, max_length=8)
+
+
+class DecisionInfluence(BaseModel):
+    entity_id: str
+    domain: DecisionDomain
+    influence: InfluenceLevel = "UNKNOWN"
+    status: CanonicalStatus = "unknown"
+    rationale: str = ""
+    evidence_labels: list[str] = Field(default_factory=list, max_length=8)
+
+
+class CanonicalRelationship(BaseModel):
+    from_entity_id: str
+    to_entity_id: str
+    relationship_type: CanonicalRelationshipType
+    relationship_basis: str = ""
+    description: str = ""
+    status: CanonicalStatus = "unknown"
+    temporal_scope: Literal["current", "historical", "candidate", "unknown"] = "unknown"
+    evidence_labels: list[str] = Field(default_factory=list, max_length=8)
+    source_urls: list[str] = Field(default_factory=list, max_length=8)
+    source_dates: list[str] = Field(default_factory=list, max_length=8)
+
+
 class RelationshipDecisionMap(BaseModel):
+    # Canonical source of truth for the relationship map. Legacy actors and
+    # relationships remain populated during migration for v2 consumers.
+    project_id: str = "project:current"
+    entities: list[EntityIdentity] = Field(default_factory=list, max_length=30)
+    participations: list[ProjectParticipation] = Field(default_factory=list, max_length=30)
+    canonical_relationships: list[CanonicalRelationship] = Field(default_factory=list, max_length=50)
+    decision_influences: list[DecisionInfluence] = Field(default_factory=list, max_length=80)
+    structure_pattern: Literal["S1", "S2", "S3", "S4", "OTHER", "UNKNOWN"] = "UNKNOWN"
+    research_gaps: list[str] = Field(default_factory=list, max_length=12)
     actors: list[ProjectActor] = Field(default_factory=list, max_length=20)
     relationships: list[ProjectRelationship] = Field(default_factory=list, max_length=30)
     decision_structure_summary: str = ""
@@ -279,10 +372,52 @@ class TimelineItem(BaseModel):
     date_or_period: str
     credibility: Credibility
     evidence_labels: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list, max_length=8)
+    source_dates: list[str] = Field(default_factory=list, max_length=8)
+
+
+class LocationRelationship(BaseModel):
+    subject: str
+    relation: Literal["located_in"] = "located_in"
+    object: str
+
+
+class ProjectLocation(BaseModel):
+    site_name: str = ""
+    address: str = ""
+    industrial_park: str = ""
+    district: str = ""
+    city: str = ""
+    province: str = ""
+    region: str = ""
+    country: str = ""
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    precision: Literal["exact_site", "industrial_park", "district", "city", "province", "region", "country", "unknown"] = "unknown"
+    status: Literal["confirmed", "partial", "unknown"] = "unknown"
+    confidence: Level = "unknown"
+    evidence_summary: str = ""
+    evidence_labels: list[str] = Field(default_factory=list, max_length=8)
+    source_urls: list[str] = Field(default_factory=list, max_length=8)
+    source_dates: list[str] = Field(default_factory=list, max_length=8)
+    coordinate_evidence_labels: list[str] = Field(default_factory=list, max_length=4)
+    coordinate_source_urls: list[str] = Field(default_factory=list, max_length=4)
+    relationships: list[LocationRelationship] = Field(default_factory=list, max_length=8)
+
+    @field_validator("evidence_labels", "source_urls", "source_dates", mode="before")
+    @classmethod
+    def bound_provenance(cls, value: object) -> object:
+        return _bounded_strings(value, 8)
+
+    @field_validator("coordinate_evidence_labels", "coordinate_source_urls", mode="before")
+    @classmethod
+    def bound_coordinate_provenance(cls, value: object) -> object:
+        return _bounded_strings(value, 4)
 
 
 class ProjectIntelligence(BaseModel):
     owner_summary: str = ""
+    project_location: ProjectLocation = Field(default_factory=ProjectLocation)
     current_project_facts: list[IntelligenceItem] = Field(default_factory=list, max_length=15)
     historical_projects: list[IntelligenceItem] = Field(default_factory=list, max_length=15)
     project_ecosystem: list[IntelligenceItem] = Field(default_factory=list, max_length=15)

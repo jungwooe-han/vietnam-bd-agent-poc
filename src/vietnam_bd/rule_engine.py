@@ -60,7 +60,17 @@ class RuleEngineResult(BaseModel):
 
 def _matched_keywords(text: str, keywords: Iterable[str]) -> list[str]:
     lowered = text.casefold()
-    return [keyword for keyword in keywords if keyword.casefold() in lowered]
+    matches = []
+    for keyword in keywords:
+        normalized = keyword.casefold()
+        if re.fullmatch(r"[a-z0-9][a-z0-9 .+/#-]*", normalized):
+            pattern = rf"(?<![a-z0-9-]){re.escape(normalized)}(?![a-z0-9-])"
+            matched = bool(re.search(pattern, lowered))
+        else:
+            matched = normalized in lowered
+        if matched:
+            matches.append(keyword)
+    return matches
 
 
 def _evidence(claim: str, matches: list[str], axis: str) -> EvidenceItem:

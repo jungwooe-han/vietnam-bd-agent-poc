@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+from streamlit.testing.v1 import AppTest
+
 from src.vietnam_bd.demo_data_v2 import demo_v2_result
-from src.vietnam_bd.models import IntelligenceItem
+from src.vietnam_bd.models import EvidenceItem, IntelligenceItem, ProjectLocation, TimelineItem
 from src.vietnam_bd.localization_v3 import ui
 from src.vietnam_bd.ui_components_v3 import (
     STAGE_LABELS,
@@ -11,7 +13,14 @@ from src.vietnam_bd.ui_components_v3 import (
     _decision_guidance,
     _display_value,
     _evidence_label,
+    _location_map_rows,
+    _location_search_query,
+    _location_zoom,
+    _public_progress_events,
+    _source_popover,
+    _source_rows,
     _stage_index,
+    _unknown_roles_for_stage,
     _user_copy,
 )
 from src.vietnam_bd.v3_rule_engine import build_v3_result
@@ -69,6 +78,201 @@ class OpportunityUIHelpersTest(unittest.TestCase):
         self.assertEqual(ui("ko", "opportunity_tab"), "기회 개요")
         self.assertEqual(ui("ko", "strategy_tab"), "접촉 전략")
         self.assertEqual(ui("ko", "meeting_tab"), "미팅 준비")
+
+    def test_legacy_provenance_links_urls_to_matching_publishers(self) -> None:
+        rules, rows = _source_rows(
+            [
+                "rule:신축",
+                "Vietnam News",
+                "Vietnam News (Viet Nam News)",
+                "NIC — Vietnam Innovation Tech Investment Report",
+            ],
+            [
+                "https://vietnamnews.vn/economy/article.html",
+                "https://nic.gov.vn/report.pdf",
+            ],
+            ["2026-08-14", "2024-04"],
+        )
+
+        self.assertEqual(rules, ["신축"])
+        self.assertEqual(rows, [
+            ("Vietnam News", "https://vietnamnews.vn/economy/article.html", "2026-08-14"),
+            ("NIC — Vietnam Innovation Tech Investment Report", "https://nic.gov.vn/report.pdf", "2024-04"),
+        ])
+
+    def test_popover_hides_internal_rules_and_repeated_summary(self) -> None:
+        item = EvidenceItem(
+            claim="신축",
+            credibility="likely",
+            rationale="test",
+            source_labels=["rule:신축", "Vietnam News"],
+            source_urls=["", "https://vietnamnews.vn/project"],
+            source_dates=["", "2026-08-14"],
+        )
+
+        rendered = _source_popover(item)
+
+        self.assertNotIn("rule:신축", rendered)
+        self.assertNotIn("판단 규칙", rendered)
+        self.assertNotIn("근거 요약", rendered)
+        self.assertIn("https://vietnamnews.vn/project", rendered)
+
+    def test_check_lead_requires_an_external_reference(self) -> None:
+        item = EvidenceItem(claim="미확정", credibility="unknown", rationale="test")
+        linked = IntelligenceItem(
+            claim="유사 프로젝트에서 기존 시설 Fit-out이 확인됨",
+            credibility="hypothesis",
+            source_urls=["https://example.com/case"],
+            evidence_labels=["유사 프로젝트"],
+        )
+        unlinked = linked.model_copy(update={"source_urls": []})
+
+        self.assertIn("확인해볼 단서", _source_popover(item, hypothesis=linked))
+        self.assertIn("https://example.com/case", _source_popover(item, hypothesis=linked))
+        self.assertNotIn("확인해볼 단서", _source_popover(item, hypothesis=unlinked))
+
+    def test_public_progress_groups_duplicate_reporting_of_one_event(self) -> None:
+        result = build_v3_result(demo_v2_result(), "demo")
+        result.v2_snapshot.project_intelligence.project_timeline = [
+            TimelineItem(
+                milestone="NIC and Thermo Fisher signed an MoU.",
+                date_or_period="2026-08-14",
+                credibility="confirmed",
+                evidence_labels=["Vietnam News"],
+                source_urls=["https://example.com/news"],
+            ),
+            TimelineItem(
+                milestone="The parties announced an MoU and implementation roadmap.",
+                date_or_period="2026-08-14",
+                credibility="confirmed",
+                evidence_labels=["NIC"],
+                source_urls=["https://example.com/official"],
+            ),
+            TimelineItem(
+                milestone="No public evidence of construction start.",
+                date_or_period="2026-08-14",
+                credibility="confirmed",
+            ),
+            TimelineItem(
+                milestone="NIC Hòa Lạc is an existing/operational NIC campus.",
+                date_or_period="2024-04",
+                credibility="confirmed",
+            ),
+        ]
+
+        events = _public_progress_events(result)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(len(events[0]["sources"]), 2)
+
+    def test_unknown_role_layer_is_stage_based_and_bounded(self) -> None:
+        result = build_v3_result(demo_v2_result(), "demo")
+        result.project_stage.value = "사업기획"
+
+        roles = _unknown_roles_for_stage(result)
+
+        self.assertGreaterEqual(len(roles), 3)
+        self.assertLessEqual(len(roles), 5)
+        self.assertTrue(any("PM" in role for role, _note in roles))
+
+    def test_map_requires_verified_coordinate_pair(self) -> None:
+        unknown = ProjectLocation(
+            industrial_park="Yen Phong II-C Industrial Park",
+            precision="industrial_park",
+            status="confirmed",
+        )
+        confirmed = unknown.model_copy(update={"latitude": 21.18, "longitude": 106.02})
+
+        self.assertEqual(_location_map_rows(unknown), [])
+        self.assertEqual(_location_map_rows(confirmed), [{"lat": 21.18, "lon": 106.02}])
+        self.assertEqual(_location_zoom(confirmed), 11)
+        self.assertIn("Yen Phong II-C", _location_search_query(unknown))
+
+    def test_opportunity_page_renders_streamlit_map_for_verified_location(self) -> None:
+        source = """
+from src.vietnam_bd.demo_data_v2 import demo_v2_result
+from src.vietnam_bd.models import ProjectLocation
+from src.vietnam_bd.ui_components_v3 import render_page_1_opportunity_v3
+from src.vietnam_bd.v3_rule_engine import build_v3_result
+
+result = build_v3_result(demo_v2_result(), "demo")
+result.v2_snapshot.project_intelligence.project_location = ProjectLocation(
+    site_name="Demo Factory",
+    industrial_park="Yen Phong II-C Industrial Park",
+    province="Bac Ninh",
+    country="Vietnam",
+    latitude=21.18,
+    longitude=106.02,
+    precision="industrial_park",
+    status="confirmed",
+    confidence="high",
+    evidence_summary="Official source confirms the industrial park.",
+    evidence_labels=["Official source"],
+    source_urls=["https://example.com/location"],
+    coordinate_evidence_labels=["Official metadata"],
+    coordinate_source_urls=["https://example.com/coordinates"],
+)
+render_page_1_opportunity_v3(result)
+"""
+
+        app = AppTest.from_string(source).run(timeout=20)
+
+        self.assertFalse(app.exception)
+        self.assertTrue(any(
+            "좌표 근거가 확인된 위치만 표시합니다" in item.value
+            for item in app.markdown
+        ))
+
+    def test_location_name_renders_reference_map_without_coordinates(self) -> None:
+        source = """
+from src.vietnam_bd.demo_data_v2 import demo_v2_result
+from src.vietnam_bd.models import ProjectLocation
+from src.vietnam_bd.ui_components_v3 import render_page_1_opportunity_v3
+from src.vietnam_bd.v3_rule_engine import build_v3_result
+
+result = build_v3_result(demo_v2_result(), "demo")
+result.v2_snapshot.project_intelligence.project_location = ProjectLocation(
+    site_name="NIC Hòa Lạc",
+    industrial_park="Hòa Lạc Hi-Tech Park",
+    city="Hà Nội",
+    country="Vietnam",
+    precision="industrial_park",
+    status="confirmed",
+    confidence="high",
+    evidence_labels=["Official source"],
+    source_urls=["https://example.com/location"],
+)
+render_page_1_opportunity_v3(result)
+"""
+
+        app = AppTest.from_string(source).run(timeout=20)
+
+        self.assertFalse(app.exception)
+        self.assertTrue(any(
+            "공개된 장소명을 기준으로 표시한 참고 위치" in item.value
+            for item in app.markdown
+        ))
+
+    def test_relationship_map_renders_verified_nodes_and_separate_gaps(self) -> None:
+        source = '''
+from tests.test_relationship_map_entity_first import nic_thermo_v2_map
+from src.vietnam_bd.demo_data_v2 import demo_v2_result
+from src.vietnam_bd.ui_components_v3 import render_page_1_opportunity_v3
+from src.vietnam_bd.v3_rule_engine import build_v3_result
+
+v2 = demo_v2_result()
+v2.context.business_structure = []
+v2.relationship_map = nic_thermo_v2_map()
+render_page_1_opportunity_v3(build_v3_result(v2, "NIC Thermo Fisher MOU"))
+'''
+
+        app = AppTest.from_string(source).run(timeout=30)
+
+        self.assertFalse(app.exception)
+        self.assertTrue(any("Project Layer" in item.value for item in app.markdown))
+        self.assertTrue(any("아직 확인되지 않은 역할" in item.value for item in app.markdown))
+        self.assertFalse(any("Research Gaps" in item.value for item in app.markdown))
+        self.assertFalse(any("Not identified" in item.value and "<svg" in item.value for item in app.markdown))
 
 
 if __name__ == "__main__":

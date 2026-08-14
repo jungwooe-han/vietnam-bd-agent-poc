@@ -4,8 +4,13 @@ import unittest
 from unittest.mock import patch
 
 from src.vietnam_bd.engine import ProjectAnalysisInput, analyze_project
-from src.vietnam_bd.firecrawl_provider import _collect, build_firecrawl_query
-from src.vietnam_bd.research_models import SeedUnderstanding
+from src.vietnam_bd.firecrawl_provider import (
+    _collect,
+    build_firecrawl_query,
+    build_location_query,
+    location_needs_supplement,
+)
+from src.vietnam_bd.research_models import ResearchProjectLocation, SeedUnderstanding
 from src.vietnam_bd.telemetry import AnalysisTelemetry, activate, deactivate
 
 
@@ -72,6 +77,32 @@ class FirecrawlProviderTest(unittest.TestCase):
         self.assertIn("VSIP Danang Industrial Park", query)
         self.assertIn("Khu công nghiệp VSIP Đà Nẵng", query)
         self.assertIn("Điện Bàn Bắc", query)
+
+    def test_location_query_uses_project_and_vietnam_site_terms(self) -> None:
+        understanding = SeedUnderstanding(
+            company="Samsung Electronics",
+            project="New semiconductor plant",
+            location="Bac Ninh Vietnam",
+        )
+
+        query = build_location_query("seed", understanding)
+
+        self.assertIn("Samsung Electronics", query)
+        self.assertIn("New semiconductor plant", query)
+        self.assertIn("industrial park", query)
+        self.assertIn("khu cong nghiep", query)
+        self.assertIn("project site", query)
+
+    def test_location_supplement_is_bounded_to_insufficient_results(self) -> None:
+        self.assertTrue(location_needs_supplement(ResearchProjectLocation()))
+        self.assertTrue(location_needs_supplement(ResearchProjectLocation(
+            province="Bac Ninh", precision="province", status="partial",
+        )))
+        self.assertFalse(location_needs_supplement(ResearchProjectLocation(
+            industrial_park="Yen Phong II-C Industrial Park",
+            precision="industrial_park",
+            status="confirmed",
+        )))
 
     def test_research_provider_dispatch_does_not_change_existing_default(self) -> None:
         from src.vietnam_bd import research

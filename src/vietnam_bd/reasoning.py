@@ -16,6 +16,7 @@ from .models import (
     BusinessDevelopmentDecision,
     CanWeEnter,
     EvidenceItem,
+    EntityIdentity,
     ExcludedWorkstream,
     InformationToConfirm,
     MeetingTalkingPoints,
@@ -23,9 +24,14 @@ from .models import (
     NextBestAction,
     IntelligenceItem,
     PartnerPattern,
+    LocationRelationship,
     ProjectActor,
     ProjectIntelligence,
+    ProjectLocation,
     ProjectRelationship,
+    ProjectParticipation,
+    DecisionInfluence,
+    CanonicalRelationship,
     ProposalHypothesis,
     RelationshipDecisionMap,
     StakeholderMeetingPlan,
@@ -39,6 +45,13 @@ from .sfdc_sample import match_sample_opportunities
 from .v2_prompts import commercial_prompt, engagement_prompt, workstream_prompt
 from .vertical_guardrails import DEFAULT_WORKSTREAM_GUARDRAILS, WorkstreamGuardrail, allowed_workstream_candidates
 from .telemetry import measured_step, record_ai_response, record_retry
+from .relationship_taxonomy import (
+    ROLE_DECISION_INFLUENCE,
+    canonical_entity_id,
+    canonical_node_role,
+    legacy_entity_mapping,
+    normalize_relationship_type,
+)
 
 
 class WorkstreamReasoning(BaseModel):
@@ -103,6 +116,8 @@ def _research_groups(bundle: ResearchBundle) -> Iterable[ResearchEvidence]:
         quick.building_type_signals,
         quick.business_structure_signals,
         quick.recent_project_signals,
+        quick.project_location.evidence,
+        quick.project_location.coordinate_evidence,
     ):
         yield from group
     if bundle.deep:
@@ -183,6 +198,7 @@ def _payload(bundle: ResearchBundle, rule_result: RuleEngineResult, seed: str) -
         "building_type_signals": compact_evidence(quick.building_type_signals),
         "business_structure_signals": compact_evidence(quick.business_structure_signals),
         "recent_project_signals": compact_evidence(quick.recent_project_signals),
+        "project_location": quick.project_location.model_dump(mode="json"),
     }
     deep = bundle.deep
     deep_compact = None if not deep else {
@@ -245,11 +261,103 @@ def _intelligence_item(item: ResearchEvidence, temporal_scope: str) -> Intellige
     )
 
 
+def _has_location_source(item: ResearchEvidence) -> bool:
+    return bool(
+        item.source_name.strip()
+        or item.source_url.strip()
+        or any((source.name or source.url).strip() for source in item.sources)
+    )
+
+
+def build_project_location(bundle: ResearchBundle) -> ProjectLocation:
+    raw = bundle.quick.project_location
+    supported = [
+        item for item in raw.evidence
+        if item.credibility in {"confirmed", "likely"} and _has_location_source(item)
+    ]
+    confirmed = [item for item in supported if item.credibility == "confirmed"]
+    if raw.status == "unknown" or raw.precision == "unknown" or not supported:
+        return ProjectLocation()
+
+    if raw.status == "confirmed" and raw.precision in {"exact_site", "industrial_park"} and confirmed:
+        status = "confirmed"
+        confidence = raw.confidence if raw.confidence in {"high", "medium"} else "medium"
+    else:
+        status = "partial"
+        confidence = raw.confidence if raw.confidence in {"medium", "low"} else "medium"
+
+    labels = list(dict.fromkeys([
+        *raw.source_labels,
+        *(label for item in supported for label in _labels(item)[0]),
+    ]))[:8]
+    urls = list(dict.fromkeys([
+        *raw.source_urls,
+        *(url for item in supported for url in _labels(item)[1]),
+    ]))[:8]
+    dates = list(dict.fromkeys(date for item in supported for date in _labels(item)[2]))[:8]
+
+    coordinate_support = [
+        item for item in raw.coordinate_evidence
+        if item.credibility == "confirmed" and _has_location_source(item)
+    ]
+    has_coordinate_pair = raw.latitude is not None and raw.longitude is not None
+    latitude = raw.latitude if has_coordinate_pair and coordinate_support else None
+    longitude = raw.longitude if has_coordinate_pair and coordinate_support else None
+    coordinate_labels = list(dict.fromkeys(
+        label for item in coordinate_support for label in _labels(item)[0]
+    ))[:4]
+    coordinate_urls = list(dict.fromkeys(
+        url for item in coordinate_support for url in _labels(item)[1]
+    ))[:4]
+
+    project_name = (
+        raw.site_name or bundle.quick.project_name
+        or (bundle.seed_understanding.project if bundle.seed_understanding else "")
+        or "프로젝트 부지"
+    )
+    hierarchy = [
+        raw.address, raw.industrial_park, raw.district, raw.city,
+        raw.province, raw.region, raw.country,
+    ]
+    hierarchy = list(dict.fromkeys(value.strip() for value in hierarchy if value.strip()))
+    relationships: list[LocationRelationship] = []
+    subject = project_name
+    for location_name in hierarchy:
+        if subject.casefold() == location_name.casefold():
+            continue
+        relationships.append(LocationRelationship(subject=subject, object=location_name))
+        subject = location_name
+
+    return ProjectLocation(
+        site_name=raw.site_name,
+        address=raw.address,
+        industrial_park=raw.industrial_park,
+        district=raw.district,
+        city=raw.city,
+        province=raw.province,
+        region=raw.region,
+        country=raw.country,
+        latitude=latitude,
+        longitude=longitude,
+        precision=raw.precision,
+        status=status,
+        confidence=confidence,
+        evidence_summary=" ".join(item.claim for item in supported[:2]),
+        evidence_labels=labels,
+        source_urls=urls,
+        source_dates=dates,
+        coordinate_evidence_labels=coordinate_labels,
+        coordinate_source_urls=coordinate_urls,
+        relationships=relationships[:8],
+    )
+
+
 def build_project_intelligence(bundle: ResearchBundle) -> ProjectIntelligence:
     deep = bundle.deep
     if not deep:
         return ProjectIntelligence(
             owner_summary=bundle.quick.company,
+            project_location=build_project_location(bundle),
             unresolved_gaps=[gap.topic for rnd in bundle.research_rounds for gap in rnd.research_gaps],
         )
     conflicts = []
@@ -257,7 +365,9 @@ def build_project_intelligence(bundle: ResearchBundle) -> ProjectIntelligence:
         if any(source.stance == "contradicts" for source in item.sources):
             conflicts.append(item.claim)
     entity_names = {
-        entity.name: entity.entity_type
+        entity.name: ", ".join(
+            entity.project_roles or list(legacy_entity_mapping(entity.entity_type, entity.name).roles)
+        )
         for rnd in bundle.research_rounds
         for entity in rnd.discovered_entities
     }
@@ -275,16 +385,61 @@ def build_project_intelligence(bundle: ResearchBundle) -> ProjectIntelligence:
                 credibility="hypothesis",
                 evidence_labels=[],
             ))
-    timeline = []
-    for item in [*bundle.quick.stage_signals, *bundle.quick.recent_project_signals]:
-        labels, _, dates = _labels(item)
-        if dates:
-            timeline.append(TimelineItem(
+    timeline_by_event: dict[tuple[str, str], TimelineItem] = {}
+    timeline_candidates = [
+        *bundle.quick.stage_signals,
+        *bundle.quick.recent_project_signals,
+        *deep.project_facts,
+    ]
+    negative_event_markers = (
+        "no public evidence", "not disclosed", "not announced", "not confirmed",
+        "공개 근거 없음", "미공개", "확인되지",
+    )
+
+    def event_type(claim: str) -> str:
+        text = claim.casefold()
+        categories = (
+            ("planning_announcement", ("mou", "memorandum", "roadmap", "협약", "양해각서")),
+            ("investment", ("investment approved", "investment announced", "funding", "투자 승인", "투자 발표")),
+            ("site", ("site selected", "land allocation", "부지 확정", "토지 할당")),
+            ("design", ("design release", "architect appointed", "design consultant", "설계 착수", "설계사 선정")),
+            ("permit", ("permit filed", "permit approved", "license granted", "인허가 신청", "인허가 승인")),
+            ("contractor", ("epc appointed", "gc appointed", "contract awarded", "contractor appointed", "epc 선정", "시공사 선정")),
+            ("construction", ("groundbreaking", "construction start", "broke ground", "착공")),
+            ("operation", ("completed", "commissioned", "operational", "inaugurated", "준공", "가동", "개소")),
+        )
+        return next((name for name, markers in categories if any(marker in text for marker in markers)), "progress")
+
+    for item in timeline_candidates:
+        if any(marker in item.claim.casefold() for marker in negative_event_markers):
+            continue
+        labels, urls, dates = _labels(item)
+        if not dates:
+            continue
+        key = (dates[0], event_type(item.claim))
+        existing = timeline_by_event.get(key)
+        if existing is None:
+            timeline_by_event[key] = TimelineItem(
                 milestone=item.claim,
                 date_or_period=dates[0],
                 credibility=item.credibility,
                 evidence_labels=labels,
-            ))
+                source_urls=urls,
+                source_dates=dates,
+            )
+            continue
+        existing.evidence_labels = list(dict.fromkeys([*existing.evidence_labels, *labels]))
+        existing.source_urls = list(dict.fromkeys([*existing.source_urls, *urls]))[:8]
+        existing.source_dates = list(dict.fromkeys([*existing.source_dates, *dates]))[:8]
+        if len(item.claim) < len(existing.milestone):
+            existing.milestone = item.claim
+        if item.credibility == "confirmed":
+            existing.credibility = "confirmed"
+    timeline = sorted(
+        timeline_by_event.values(),
+        key=lambda item: item.date_or_period,
+        reverse=True,
+    )
     open_keywords = ("unawarded", "open", "미발주", "미선정", "change order", "add-on", "추가 범위")
     open_items = [
         item for item in [*deep.project_facts, *deep.buying_signals]
@@ -300,6 +455,7 @@ def build_project_intelligence(bundle: ResearchBundle) -> ProjectIntelligence:
     ))[:10]
     return ProjectIntelligence(
         owner_summary=deep.company or bundle.quick.company,
+        project_location=build_project_location(bundle),
         current_project_facts=[_intelligence_item(item, "current") for item in deep.project_facts],
         historical_projects=[_intelligence_item(item, "historical") for item in deep.historical_projects],
         project_ecosystem=[_intelligence_item(item, "current") for item in deep.project_ecosystem],
@@ -314,7 +470,7 @@ def build_project_intelligence(bundle: ResearchBundle) -> ProjectIntelligence:
     )
 
 
-def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntelligence) -> RelationshipDecisionMap:
+def _build_relationship_map_legacy(bundle: ResearchBundle, intelligence: ProjectIntelligence) -> RelationshipDecisionMap:
     owner_name = (
         (bundle.seed_understanding.owner_candidate if bundle.seed_understanding else "")
         or bundle.quick.company or intelligence.owner_summary or "Owner / End Client"
@@ -378,9 +534,13 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 actor_status = "likely"
             else:
                 actor_status = "confirmed" if credibility == "confirmed" else "likely" if credibility == "likely" else "unknown"
+            compatibility_role = next(
+                iter(legacy_entity_mapping(entity.entity_type, entity.name).roles),
+                "OTHER",
+            )
             actors.append(ProjectActor(
                 actor_id=actor_id,
-                role=role_labels.get(entity.entity_type, entity.entity_type.replace("_", " ").title()),
+                role=compatibility_role,
                 organization=entity.name,
                 temporal_scope=temporal,
                 actor_status=actor_status,
@@ -393,12 +553,21 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 evidence_labels=entity.evidence_labels,
                 source_urls=entity.source_urls,
                 source_dates=entity.source_dates,
-                confirmation_needed=(f"Confirm whether {entity.name} is the current {role_labels.get(entity.entity_type, entity.entity_type)}" if actor_status != "confirmed" else ""),
+                confirmation_needed=(f"Confirm whether {entity.name} is the current {compatibility_role}" if actor_status != "confirmed" else ""),
             ))
             relationships.append(ProjectRelationship(
                 from_actor_id="owner",
                 to_actor_id=actor_id,
-                relationship_type=role_relation.get(entity.entity_type, "사업 관계"),
+                relationship_type={
+                    "ARCHITECT": "DESIGN_CONTRACT",
+                    "ENGINEERING_CONSULTANT": "DESIGN_CONTRACT",
+                    "PM_CM": "AWARDS_CONTRACT_TO",
+                    "EPC": "EPC_CONTRACT",
+                    "GENERAL_CONTRACTOR": "AWARDS_CONTRACT_TO",
+                    "EQUIPMENT_SUPPLIER": "SUPPLY_CONTRACT",
+                    "VENDOR": "SUPPLY_CONTRACT",
+                    "REGULATORY_AUTHORITY": "REGULATES",
+                }.get(compatibility_role, "OTHER"),
                 description="Relationship derived from research entity; detailed contract status requires evidence review.",
                 temporal_scope=temporal,
                 credibility=credibility,
@@ -430,6 +599,330 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
         relationships=relationships[:30],
         decision_structure_summary=f"Owner-centered map with {max(0, len(actors)-1)} discovered actor(s).",
         unknown_critical_actors=[gap for gap in intelligence.unresolved_gaps if any(x in gap.casefold() for x in ("epc", "gc", "architect", "consultant"))][:10],
+    )
+
+
+def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntelligence) -> RelationshipDecisionMap:
+    """Build canonical registry -> participation -> relationship -> influence.
+
+    S1-S4 pattern classification is deliberately the final step. Legacy actors
+    and relationships are projections for existing v2 consumers, not the source
+    of truth for the map.
+    """
+
+    project_name = bundle.quick.project_name or "current"
+    project_id = "project:" + "".join(
+        char if char.isalnum() else "-" for char in project_name.casefold()
+    ).strip("-")
+    if project_id == "project:":
+        project_id = "project:current"
+
+    def status_for(credibility: str, has_evidence: bool = True) -> str:
+        if not has_evidence:
+            return "unknown"
+        return {
+            "confirmed": "confirmed",
+            "likely": "likely",
+            "hypothesis": "candidate",
+        }.get(credibility, "unknown")
+
+    owner_name = (
+        (bundle.seed_understanding.owner_candidate if bundle.seed_understanding else "")
+        or bundle.quick.company
+        or intelligence.owner_summary
+        or "Unknown project owner"
+    )
+    owner_evidence = [
+        item for item in [
+            *bundle.quick.business_structure_signals,
+            *bundle.quick.recent_project_signals,
+            *(bundle.deep.project_facts if bundle.deep else []),
+        ]
+        if owner_name.casefold() in f"{item.claim} {item.rationale}".casefold()
+    ]
+    owner_labels = list(dict.fromkeys(label for item in owner_evidence for label in _labels(item)[0]))
+    owner_urls = list(dict.fromkeys(url for item in owner_evidence for url in _labels(item)[1]))
+    owner_dates = list(dict.fromkeys(date for item in owner_evidence for date in _labels(item)[2]))
+    owner_status = "confirmed" if owner_urls else "likely" if owner_labels else "unknown"
+
+    entities: dict[str, EntityIdentity] = {}
+    participations: dict[str, ProjectParticipation] = {}
+    name_to_id: dict[str, str] = {}
+
+    def upsert_entity(
+        name: str,
+        *,
+        legacy_type: str,
+        organization_type: str = "UNKNOWN",
+        organization_scope: str = "unknown",
+        roles: list[str] | None = None,
+        credibility: str = "unknown",
+        aliases: list[str] | None = None,
+        country: str = "",
+        website: str = "",
+        evidence_labels: list[str] | None = None,
+        source_urls: list[str] | None = None,
+        source_dates: list[str] | None = None,
+        temporal_scope: str = "current",
+    ) -> str:
+        clean_name = name.strip()
+        key = clean_name.casefold()
+        entity_id = name_to_id.get(key) or canonical_entity_id(clean_name)
+        mapping = legacy_entity_mapping(legacy_type, clean_name)
+        mapped_roles = list(roles or []) or list(mapping.roles)
+        resolved_type = organization_type if organization_type != "UNKNOWN" else mapping.organization_type
+        resolved_scope = organization_scope if organization_scope != "unknown" else mapping.organization_scope
+        labels = list(evidence_labels or [])
+        urls = list(source_urls or [])
+        dates = list(source_dates or [])
+        entity_status = status_for(credibility, bool(labels or urls))
+        role_status = "candidate" if temporal_scope in {"candidate", "historical"} else entity_status
+        if entity_id not in entities:
+            entities[entity_id] = EntityIdentity(
+                entity_id=entity_id,
+                canonical_name=clean_name,
+                aliases=list(dict.fromkeys(aliases or []))[:10],
+                organization_type=resolved_type,
+                organization_scope=resolved_scope,
+                country=country,
+                website=website,
+                status=entity_status,
+                evidence_labels=labels,
+                source_urls=urls,
+                source_dates=dates,
+                legacy_entity_types=[legacy_type],
+            )
+            participations[entity_id] = ProjectParticipation(
+                project_id=project_id,
+                entity_id=entity_id,
+                roles=list(dict.fromkeys(mapped_roles)),
+                role_statuses={role: role_status for role in mapped_roles},
+                temporal_scope=temporal_scope,
+                evidence_labels=labels,
+                source_urls=urls,
+                source_dates=dates,
+            )
+        else:
+            entity = entities[entity_id]
+            entity.aliases = list(dict.fromkeys([*entity.aliases, *(aliases or [])]))[:10]
+            entity.evidence_labels = list(dict.fromkeys([*entity.evidence_labels, *labels]))[:8]
+            entity.source_urls = list(dict.fromkeys([*entity.source_urls, *urls]))[:8]
+            entity.source_dates = list(dict.fromkeys([*entity.source_dates, *dates]))[:8]
+            entity.legacy_entity_types = list(dict.fromkeys([*entity.legacy_entity_types, legacy_type]))[:8]
+            if entity.organization_type in {"UNKNOWN", "OTHER"} and resolved_type not in {"UNKNOWN", "OTHER"}:
+                entity.organization_type = resolved_type
+            if entity.organization_scope == "unknown" and resolved_scope != "unknown":
+                entity.organization_scope = resolved_scope
+            if entity_status == "confirmed" or entity.status == "unknown" and entity_status == "likely":
+                entity.status = entity_status
+            participation = participations[entity_id]
+            participation.roles = list(dict.fromkeys([*participation.roles, *mapped_roles]))[:12]
+            for role in mapped_roles:
+                old = participation.role_statuses.get(role, "unknown")
+                if role_status == "confirmed" or old == "unknown" and role_status in {"likely", "candidate"}:
+                    participation.role_statuses[role] = role_status
+            participation.evidence_labels = list(dict.fromkeys([*participation.evidence_labels, *labels]))[:8]
+            participation.source_urls = list(dict.fromkeys([*participation.source_urls, *urls]))[:8]
+            participation.source_dates = list(dict.fromkeys([*participation.source_dates, *dates]))[:8]
+        name_to_id[key] = entity_id
+        return entity_id
+
+    owner_mapping = legacy_entity_mapping("owner", owner_name)
+    owner_roles = list(owner_mapping.roles)
+    if owner_mapping.organization_type == "PUBLIC_INSTITUTION":
+        owner_roles.append("GOVERNMENT_PARTNER")
+    owner_id = upsert_entity(
+        owner_name,
+        legacy_type="owner",
+        organization_type=owner_mapping.organization_type,
+        roles=owner_roles,
+        credibility=owner_status,
+        evidence_labels=owner_labels,
+        source_urls=owner_urls,
+        source_dates=owner_dates,
+    )
+
+    candidate_names = " ".join(item.claim for item in intelligence.ecosystem_candidates).casefold()
+    historical_names = " ".join(item.claim for item in intelligence.historical_projects).casefold()
+    for research_round in bundle.research_rounds:
+        for discovered in research_round.discovered_entities:
+            if not discovered.name.strip():
+                continue
+            name_key = discovered.name.casefold()
+            temporal_scope = (
+                "candidate" if name_key in candidate_names
+                else "historical" if name_key in historical_names
+                else "current"
+            )
+            mapping = legacy_entity_mapping(discovered.entity_type, discovered.name)
+            upsert_entity(
+                discovered.name,
+                legacy_type=discovered.entity_type,
+                organization_type=discovered.organization_type,
+                organization_scope=discovered.organization_scope,
+                roles=list(discovered.project_roles) or list(mapping.roles),
+                credibility=discovered.credibility,
+                aliases=discovered.aliases,
+                country=discovered.country,
+                website=discovered.website,
+                evidence_labels=discovered.evidence_labels,
+                source_urls=discovered.source_urls,
+                source_dates=discovered.source_dates,
+                temporal_scope=temporal_scope,
+            )
+
+    def entity_id_for(name: str) -> str | None:
+        key = name.strip().casefold()
+        if key in name_to_id:
+            return name_to_id[key]
+        if len(key) < 4:
+            return None
+        return next((entity_id for known, entity_id in name_to_id.items() if key in known or known in key), None)
+
+    canonical_relationships: list[CanonicalRelationship] = []
+    for research_round in bundle.research_rounds:
+        for discovered in research_round.discovered_relationships:
+            from_id = entity_id_for(discovered.from_entity)
+            to_id = entity_id_for(discovered.to_entity)
+            if not from_id or not to_id or from_id == to_id:
+                continue
+            relationship_type, inferred_basis = normalize_relationship_type(
+                discovered.relationship_type, discovered.description
+            )
+            relationship_type = discovered.canonical_relationship_type or relationship_type
+            relationship_status = status_for(
+                discovered.credibility,
+                bool(discovered.evidence_labels or discovered.source_urls),
+            )
+            canonical_relationships.append(CanonicalRelationship(
+                from_entity_id=from_id,
+                to_entity_id=to_id,
+                relationship_type=relationship_type,
+                relationship_basis=discovered.relationship_basis or inferred_basis,
+                description=discovered.description or discovered.relationship_type,
+                status=relationship_status,
+                temporal_scope=discovered.temporal_scope,
+                evidence_labels=discovered.evidence_labels,
+                source_urls=discovered.source_urls,
+                source_dates=discovered.source_dates,
+            ))
+            if relationship_type == "CO_DEVELOPMENT":
+                target_participation = participations[to_id]
+                if "CO_DEVELOPMENT_PARTNER" not in target_participation.roles:
+                    target_participation.roles.append("CO_DEVELOPMENT_PARTNER")
+                target_participation.role_statuses["CO_DEVELOPMENT_PARTNER"] = relationship_status
+
+    decision_influences: list[DecisionInfluence] = []
+    for participation in participations.values():
+        seen_domains: set[str] = set()
+        for role in participation.roles:
+            for domain, influence in ROLE_DECISION_INFLUENCE.get(role, ()):
+                if domain in seen_domains:
+                    continue
+                seen_domains.add(domain)
+                decision_influences.append(DecisionInfluence(
+                    entity_id=participation.entity_id,
+                    domain=domain,
+                    influence=influence,
+                    status=participation.role_statuses.get(role, "unknown"),
+                    rationale=f"Derived from canonical project role {role}.",
+                    evidence_labels=participation.evidence_labels,
+                ))
+
+    all_roles = {role for participation in participations.values() for role in participation.roles}
+    investor_present = "INVESTOR" in all_roles
+    epc_entities = {p.entity_id for p in participations.values() if "EPC" in p.roles}
+    epc_invests = any(
+        relation.from_entity_id in epc_entities
+        and relation.relationship_type in {"INVESTS_IN", "OWNS"}
+        and relation.temporal_scope == "current"
+        for relation in canonical_relationships
+    )
+    epc_contract = bool(epc_entities) and any(
+        relation.relationship_type in {"EPC_CONTRACT", "AWARDS_CONTRACT_TO"}
+        and relation.temporal_scope == "current"
+        for relation in canonical_relationships
+    )
+    if epc_invests:
+        structure_pattern = "S4" if investor_present else "S3"
+    elif investor_present:
+        structure_pattern = "S2"
+    elif "PROJECT_OWNER" in all_roles and epc_contract:
+        structure_pattern = "S1"
+    elif entities:
+        structure_pattern = "OTHER"
+    else:
+        structure_pattern = "UNKNOWN"
+
+    gaps: list[str] = []
+    required_role_gaps = (
+        ("EPC", "EPC"),
+        ("Design / Engineering", "ARCHITECT|ENGINEERING_CONSULTANT"),
+        ("Operator", "OPERATOR"),
+    )
+    for label, encoded_roles in required_role_gaps:
+        if not any(role in all_roles for role in encoded_roles.split("|")):
+            gaps.append(f"{label} — Not confirmed")
+    location_country = intelligence.project_location.country.casefold()
+    if "vietnam" in location_country and not any(
+        entity.organization_scope in {"local_entity", "project_company"}
+        for entity in entities.values()
+    ):
+        gaps.insert(0, "Local Project Entity — Not confirmed")
+
+    # Backward-compatible projections. Canonical participations remain the only
+    # place where multiple roles and per-role statuses are authoritative.
+    actors: list[ProjectActor] = []
+    for entity in entities.values():
+        participation = participations[entity.entity_id]
+        primary_role = participation.roles[0] if participation.roles else "OTHER"
+        role_states = list(participation.role_statuses.values())
+        participation_status = next(
+            (status for status in ("confirmed", "likely", "candidate", "unknown") if status in role_states),
+            entity.status,
+        )
+        credibility = "hypothesis" if participation_status == "candidate" else participation_status
+        actors.append(ProjectActor(
+            actor_id=entity.entity_id,
+            role=primary_role,
+            organization=entity.canonical_name,
+            temporal_scope=participation.temporal_scope,
+            actor_status=participation_status,
+            participation_status="Canonical project participation",
+            credibility=credibility,
+            rationale="Compatibility projection from canonical entity and participation.",
+            evidence_labels=entity.evidence_labels,
+            source_urls=entity.source_urls,
+            source_dates=entity.source_dates,
+            confirmation_needed="" if participation_status in {"confirmed", "likely"} else f"Confirm {entity.canonical_name}",
+        ))
+    relationships = [ProjectRelationship(
+        from_actor_id=relation.from_entity_id,
+        to_actor_id=relation.to_entity_id,
+        relationship_type=relation.relationship_type,
+        description=relation.description,
+        temporal_scope=relation.temporal_scope,
+        credibility="hypothesis" if relation.status == "candidate" else relation.status,
+        evidence_labels=relation.evidence_labels,
+        source_urls=relation.source_urls,
+        source_dates=relation.source_dates,
+    ) for relation in canonical_relationships]
+
+    return RelationshipDecisionMap(
+        project_id=project_id,
+        entities=list(entities.values()),
+        participations=list(participations.values()),
+        canonical_relationships=canonical_relationships,
+        decision_influences=decision_influences,
+        structure_pattern=structure_pattern,
+        research_gaps=gaps,
+        actors=actors[:20],
+        relationships=relationships[:30],
+        decision_structure_summary=(
+            f"Canonical entity-first map with {len(entities)} entities; "
+            f"structure pattern classified afterwards as {structure_pattern}."
+        ),
+        unknown_critical_actors=gaps[:10],
     )
 
 

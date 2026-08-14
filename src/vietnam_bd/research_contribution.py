@@ -85,8 +85,8 @@ def quick_entities(result: QuickResearchResult) -> list[tuple[str, str]]:
     return entities
 
 
-def round_entities(result: ResearchRoundResult) -> list[tuple[str, str]]:
-    return [(item.entity_type, item.name) for item in result.discovered_entities if item.name.strip()]
+def round_entities(result: ResearchRoundResult) -> list[DiscoveredEntity]:
+    return [item for item in result.discovered_entities if item.name.strip()]
 
 
 def record_quick_research_contribution(
@@ -184,7 +184,9 @@ def record_final_output_contribution(result: Any) -> None:
 
 def _entity_key(item: tuple[str, str] | DiscoveredEntity) -> tuple[str, str]:
     if isinstance(item, DiscoveredEntity):
-        kind, name = item.entity_type, item.name
+        canonical_roles = ",".join(sorted(item.project_roles))
+        kind = f"{item.organization_type}:{canonical_roles}" if item.organization_type != "UNKNOWN" or canonical_roles else item.entity_type
+        name = item.name
     else:
         kind, name = item
     return kind.casefold().strip(), normalize_evidence_claim(name)

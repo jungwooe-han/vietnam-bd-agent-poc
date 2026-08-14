@@ -7,11 +7,23 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from .models import BDV2AnalysisResult
+from .models import (
+    BDV2AnalysisResult,
+    CanonicalRelationship,
+    DecisionInfluence,
+    EntityIdentity,
+    ProjectParticipation,
+)
 from .models_v3 import (
     BDV3AnalysisResult, V3ProductRecommendation, V3ProjectFact, V3Question,
     V3RelationshipMap, V3StakeholderTarget, V3StructureNode, V3StructureRelation,
     V3TalkingPoint,
+)
+from .relationship_taxonomy import (
+    CORPORATE_RELATIONSHIPS,
+    ROLE_DECISION_INFLUENCE,
+    canonical_entity_id,
+    normalize_relationship_type,
 )
 
 
@@ -59,7 +71,12 @@ def _read_rulebook(path: Path = RULEBOOK_PATH) -> dict[str, list[dict[str, str]]
 
 
 def _status(credibility: str) -> str:
-    return "confirmed" if credibility == "confirmed" else "inferred" if credibility in {"likely", "hypothesis"} else "unknown"
+    return {
+        "confirmed": "confirmed",
+        "likely": "likely",
+        "hypothesis": "candidate",
+        "candidate": "candidate",
+    }.get(credibility, "unknown")
 
 
 def _priority(value: str) -> int | None:
@@ -70,20 +87,237 @@ def _priority(value: str) -> int | None:
         return None
 
 
+def _legacy_roles(role: str) -> list[str]:
+    text = role.casefold().replace("-", " ").replace("_", " ")
+    matches = (
+        ("project owner", "PROJECT_OWNER"), ("owner", "PROJECT_OWNER"),
+        ("end client", "END_CLIENT"), ("investor", "INVESTOR"),
+        ("sponsor", "SPONSOR"), ("developer", "DEVELOPER"), ("host", "HOST"),
+        ("co development", "CO_DEVELOPMENT_PARTNER"), ("strategic partner", "STRATEGIC_PARTNER"),
+        ("architect", "ARCHITECT"), ("design", "ENGINEERING_CONSULTANT"),
+        ("engineering consultant", "ENGINEERING_CONSULTANT"), ("pm / cm", "PM_CM"),
+        ("pm cm", "PM_CM"), ("epc", "EPC"), ("general contractor", "GENERAL_CONTRACTOR"),
+        ("gc ", "GENERAL_CONTRACTOR"), ("mep", "MEP_CONTRACTOR"),
+        ("technology", "TECHNOLOGY_PROVIDER"), ("solution", "SOLUTION_PROVIDER"),
+        ("equipment", "EQUIPMENT_SUPPLIER"), ("supplier", "EQUIPMENT_SUPPLIER"),
+        ("vendor", "VENDOR"), ("operator", "OPERATOR"),
+        ("government", "GOVERNMENT_PARTNER"), ("authority", "REGULATORY_AUTHORITY"),
+        ("industrial park", "INDUSTRIAL_PARK"), ("landlord", "LANDLORD"),
+    )
+    roles = [canonical for token, canonical in matches if token in text]
+    return list(dict.fromkeys(roles)) or ["OTHER"]
+
+
+def _legacy_organization_type(role: str) -> str:
+    text = role.casefold()
+    if any(token in text for token in ("government", "authority")):
+        return "PUBLIC_INSTITUTION"
+    if any(token in text for token in ("technology", "solution")):
+        return "TECHNOLOGY_COMPANY"
+    if any(token in text for token in ("architect", "engineering", "epc", "pm / cm")):
+        return "ENGINEERING_COMPANY"
+    if any(token in text for token in ("contractor", "mep")):
+        return "CONSTRUCTION_COMPANY"
+    if any(token in text for token in ("investor", "capital", "pef")):
+        return "FINANCIAL_INSTITUTION"
+    if "industrial park" in text:
+        return "INDUSTRIAL_PARK_DEVELOPER"
+    return "PRIVATE_COMPANY"
+
+
+def _ensure_canonical_relationship_map(v2: BDV2AnalysisResult) -> None:
+    relmap = v2.relationship_map
+    if relmap.entities:
+        return
+    current_project_text = " ".join([
+        v2.opportunity_title,
+        v2.executive_summary,
+    ]).casefold()
+    entity_ids: dict[str, str] = {}
+    for actor in relmap.actors:
+        if not actor.organization or actor.organization.upper() == "UNKNOWN":
+            continue
+        entity_id = canonical_entity_id(actor.organization)
+        entity_ids[actor.actor_id] = entity_id
+        role_text = actor.role.casefold()
+        scope = (
+            "global_hq" if role_text.strip() in {"hq", "owner hq"} or "global hq" in role_text
+            else "local_entity" if "local" in role_text or "subsidiary" in role_text
+            else "unknown"
+        )
+        status = actor.actor_status
+        relmap.entities.append(EntityIdentity(
+            entity_id=entity_id,
+            canonical_name=actor.organization,
+            organization_type=_legacy_organization_type(actor.role),
+            organization_scope=scope,
+            status=status,
+            evidence_labels=actor.evidence_labels,
+            source_urls=actor.source_urls,
+            source_dates=actor.source_dates,
+            legacy_entity_types=[actor.role],
+        ))
+        roles = _legacy_roles(actor.role)
+        organization_key = actor.organization.casefold().split("(", 1)[0].strip()
+        directly_mentioned = bool(
+            len(organization_key) >= 4
+            and re.search(rf"(?<!\w){re.escape(organization_key)}(?!\w)", current_project_text)
+        )
+        partnership_signal = any(token in current_project_text for token in (
+            "memorandum of understanding", "mou", "co-development", "joint roadmap", "joint development"
+        ))
+        technology_signal = any(token in current_project_text for token in (
+            "technology", "equipment", "laboratory", "lab"
+        ))
+        if directly_mentioned and roles == ["OTHER"] and partnership_signal and technology_signal:
+            roles = ["CO_DEVELOPMENT_PARTNER", "TECHNOLOGY_PROVIDER", "EQUIPMENT_SUPPLIER"]
+            relmap.entities[-1].organization_type = "TECHNOLOGY_COMPANY"
+        if any(token in actor.organization.casefold() for token in (
+            "national innovation centre", "national innovation center"
+        )):
+            roles = list(dict.fromkeys([*roles, "HOST", "GOVERNMENT_PARTNER"]))
+            relmap.entities[-1].organization_type = "PUBLIC_INSTITUTION"
+        decision_role = bool(set(roles) & {
+            "PROJECT_OWNER", "END_CLIENT", "INVESTOR", "SPONSOR", "DEVELOPER",
+            "HOST", "CO_DEVELOPMENT_PARTNER", "STRATEGIC_PARTNER", "ARCHITECT",
+            "ENGINEERING_CONSULTANT", "PM_CM", "EPC", "GENERAL_CONTRACTOR",
+            "TECHNOLOGY_PROVIDER", "SOLUTION_PROVIDER", "EQUIPMENT_SUPPLIER",
+            "OPERATOR", "GOVERNMENT_PARTNER", "REGULATORY_AUTHORITY",
+            "INDUSTRIAL_PARK", "LANDLORD",
+        })
+        participation_temporal = actor.temporal_scope
+        role_status = status
+        if actor.temporal_scope == "current" and not directly_mentioned and not decision_role:
+            participation_temporal = "candidate"
+            role_status = "candidate"
+        if roles != ["OTHER"] or scope == "unknown":
+            relmap.participations.append(ProjectParticipation(
+                project_id=relmap.project_id,
+                entity_id=entity_id,
+                roles=roles,
+                role_statuses={role: role_status for role in roles},
+                temporal_scope=participation_temporal,
+                evidence_labels=actor.evidence_labels,
+                source_urls=actor.source_urls,
+                source_dates=actor.source_dates,
+            ))
+            for role in roles:
+                for domain, influence in ROLE_DECISION_INFLUENCE.get(role, ()):
+                    relmap.decision_influences.append(DecisionInfluence(
+                        entity_id=entity_id,
+                        domain=domain,
+                        influence=influence,
+                        status=role_status,
+                        rationale=f"Migrated from legacy role {actor.role}.",
+                        evidence_labels=actor.evidence_labels,
+                    ))
+    for relation in relmap.relationships:
+        from_id = entity_ids.get(relation.from_actor_id)
+        to_id = entity_ids.get(relation.to_actor_id)
+        if not from_id or not to_id or from_id == to_id:
+            continue
+        relationship_type, basis = normalize_relationship_type(
+            relation.relationship_type, relation.description
+        )
+        relmap.canonical_relationships.append(CanonicalRelationship(
+            from_entity_id=from_id,
+            to_entity_id=to_id,
+            relationship_type=relationship_type,
+            relationship_basis=basis,
+            description=relation.description or relation.relationship_type,
+            status=_status(relation.credibility),
+            temporal_scope=relation.temporal_scope,
+            evidence_labels=relation.evidence_labels,
+            source_urls=relation.source_urls,
+            source_dates=relation.source_dates,
+        ))
+    owner_participation = next((
+        item for item in relmap.participations
+        if "PROJECT_OWNER" in item.roles and item.temporal_scope == "current"
+        and item.role_statuses.get("PROJECT_OWNER") in {"confirmed", "likely"}
+    ), None)
+    partner_participation = next((
+        item for item in relmap.participations
+        if "CO_DEVELOPMENT_PARTNER" in item.roles and item.temporal_scope == "current"
+        and item.role_statuses.get("CO_DEVELOPMENT_PARTNER") in {"confirmed", "likely"}
+    ), None)
+    partnership_signal = any(token in current_project_text for token in (
+        "memorandum of understanding", "mou", "co-development", "joint roadmap", "joint development"
+    ))
+    if owner_participation and partner_participation and partnership_signal and not any(
+        relation.relationship_type in {"CO_DEVELOPMENT", "MOU"}
+        for relation in relmap.canonical_relationships
+    ):
+        owner_entity = next(entity for entity in relmap.entities if entity.entity_id == owner_participation.entity_id)
+        partner_entity = next(entity for entity in relmap.entities if entity.entity_id == partner_participation.entity_id)
+        shared_urls = list(set(owner_entity.source_urls) & set(partner_entity.source_urls))
+        relationship_status = "confirmed" if shared_urls else "likely"
+        relmap.canonical_relationships.append(CanonicalRelationship(
+            from_entity_id=owner_entity.entity_id,
+            to_entity_id=partner_entity.entity_id,
+            relationship_type="CO_DEVELOPMENT",
+            relationship_basis="MOU",
+            description="Legacy migration from a directly supported MoU / joint-development summary.",
+            status=relationship_status,
+            temporal_scope="current",
+            evidence_labels=list(dict.fromkeys([*owner_entity.evidence_labels, *partner_entity.evidence_labels]))[:8],
+            source_urls=shared_urls[:8],
+        ))
+    relmap.research_gaps = list(dict.fromkeys([
+        *relmap.research_gaps,
+        *[f"{item} — Not confirmed" for item in relmap.unknown_critical_actors],
+    ]))[:12]
+
+
+def _classify_structure(v2: BDV2AnalysisResult) -> tuple[str, str, str, list[str]]:
+    relmap = v2.relationship_map
+    roles_by_entity = {item.entity_id: set(item.roles) for item in relmap.participations}
+    all_roles = {role for roles in roles_by_entity.values() for role in roles}
+    epc_entities = {entity_id for entity_id, roles in roles_by_entity.items() if "EPC" in roles}
+    investor_present = "INVESTOR" in all_roles
+    epc_invests = any(
+        relation.from_entity_id in epc_entities
+        and relation.relationship_type in {"INVESTS_IN", "OWNS"}
+        and relation.status in {"confirmed", "likely"}
+        and relation.temporal_scope == "current"
+        for relation in relmap.canonical_relationships
+    )
+    epc_contract = bool(epc_entities) and any(
+        relation.relationship_type in {"EPC_CONTRACT", "AWARDS_CONTRACT_TO"}
+        and relation.status in {"confirmed", "likely"}
+        and relation.temporal_scope == "current"
+        for relation in relmap.canonical_relationships
+    )
+    if epc_invests:
+        pattern = "S4" if investor_present else "S3"
+    elif investor_present:
+        pattern = "S2"
+    elif "PROJECT_OWNER" in all_roles and epc_contract:
+        pattern = "S1"
+    elif relmap.entities:
+        pattern = "OTHER"
+    else:
+        pattern = "UNKNOWN"
+    labels = {
+        "S1": "Owner-funded / EPC delivery",
+        "S2": "Owner + financial investor",
+        "S3": "EPC investment participation",
+        "S4": "EPC + financial investor participation",
+        "OTHER": "Other confirmed project structure",
+        "UNKNOWN": "Not confirmed",
+    }
+    evidence = list(dict.fromkeys(
+        label for entity in relmap.entities for label in entity.evidence_labels
+    ))[:12]
+    relmap.structure_pattern = pattern
+    status = "confirmed" if pattern in {"S1", "S2", "S3", "S4"} else "partial" if pattern == "OTHER" else "unknown"
+    return pattern, labels[pattern], status, evidence
+
+
 def _structure(v2: BDV2AnalysisResult, text: str) -> tuple[str | None, str, str, list[str]]:
-    claims = " ".join(x.claim + " " + x.rationale for x in v2.context.business_structure)
-    combined = (claims + " " + text).lower()
-    evidence = [x.claim for x in v2.context.business_structure if x.credibility != "unknown"]
-    epc_owner = any(k in combined for k in ("epc invest", "epc equity", "epc ownership", "epc가 투자", "epc 지분"))
-    fi = any(k in combined for k in ("financial investor", "private equity", " pef", " fi ", "재무적 투자"))
-    if epc_owner:
-        return ("S4" if fi else "S3", "EPC Owner 참여 + FI" if fi else "EPC Owner 참여", "inferred", evidence)
-    if fi:
-        return "S2", "Owner + FI / EPC 시공만", "inferred", evidence
-    owner_known = any("end client" in x.claim.lower() or "owner" in x.claim.lower() for x in v2.context.business_structure)
-    if owner_known and any(k in combined for k in ("epc", "gc", "construction")):
-        return "S1", "Owner 전액 투자 / EPC 시공만", "inferred", evidence
-    return None, "Not confirmed", "unknown", evidence
+    del text  # Pattern classification never reads free-text seed content.
+    _ensure_canonical_relationship_map(v2)
+    return _classify_structure(v2)
 
 
 def _stage(v2: BDV2AnalysisResult) -> tuple[str | None, str]:
@@ -95,13 +329,170 @@ def _stage(v2: BDV2AnalysisResult) -> tuple[str | None, str]:
     return None, "Unknown"
 
 
+def _canonical_v3_relationship_map(v2: BDV2AnalysisResult) -> V3RelationshipMap:
+    _ensure_canonical_relationship_map(v2)
+    pattern, pattern_name, _, evidence = _classify_structure(v2)
+    relmap = v2.relationship_map
+    entities = {entity.entity_id: entity for entity in relmap.entities}
+    participations = {item.entity_id: item for item in relmap.participations}
+    visible_statuses = {"confirmed", "likely"}
+    corporate_relations = [
+        relation for relation in relmap.canonical_relationships
+        if relation.relationship_type in CORPORATE_RELATIONSHIPS
+        and relation.status in visible_statuses
+    ]
+    corporate_entity_ids = {
+        entity_id
+        for relation in corporate_relations
+        for entity_id in (relation.from_entity_id, relation.to_entity_id)
+        if entity_id in entities and entities[entity_id].status in visible_statuses
+    }
+
+    def readable(value: str) -> str:
+        special = {"PM_CM": "PM / CM", "EPC": "EPC", "MEP_CONTRACTOR": "MEP Contractor"}
+        return special.get(value, value.replace("_", " ").title())
+
+    def strongest(statuses: list[str]) -> str:
+        for status in ("confirmed", "likely", "candidate", "unknown"):
+            if status in statuses:
+                return status
+        return "unknown"
+
+    nodes: list[V3StructureNode] = []
+    corporate_node_ids: dict[str, str] = {}
+    project_node_ids: dict[str, str] = {}
+    position_cycle = ("LEFT", "CENTER", "RIGHT")
+
+    for index, entity_id in enumerate(sorted(
+        corporate_entity_ids,
+        key=lambda item: ({"global_hq": 0, "regional_hq": 1, "local_entity": 2, "project_company": 3}.get(entities[item].organization_scope, 4), entities[item].canonical_name),
+    )):
+        entity = entities[entity_id]
+        node_id = f"corporate:{entity_id}"
+        corporate_node_ids[entity_id] = node_id
+        corporate_role = "Parent Company" if entity.organization_scope in {"global_hq", "regional_hq"} else "Local Entity"
+        nodes.append(V3StructureNode(
+            node_id=node_id,
+            entity_id=entity_id,
+            role=corporate_role,
+            roles=[corporate_role],
+            company=entity.canonical_name,
+            organization_type=entity.organization_type,
+            organization_scope=entity.organization_scope,
+            layer_type="corporate",
+            temporal_scope="current",
+            layer=1 + index // 3,
+            position=position_cycle[index % 3],
+            required=False,
+            status=entity.status,
+            evidence=entity.evidence_labels,
+        ))
+
+    project_participations = [
+        item for item in relmap.participations
+        if item.entity_id in entities
+        and entities[item.entity_id].status in visible_statuses
+        and item.temporal_scope == "current"
+        and item.roles
+        and any(item.role_statuses.get(role, "unknown") in visible_statuses for role in item.roles)
+    ]
+    project_start_layer = 1 + (max((node.layer for node in nodes), default=0) if nodes else 0)
+    role_order = {
+        role: index for index, role in enumerate((
+            "PROJECT_OWNER", "END_CLIENT", "INVESTOR", "SPONSOR", "DEVELOPER", "HOST",
+            "CO_DEVELOPMENT_PARTNER", "STRATEGIC_PARTNER", "ARCHITECT",
+            "ENGINEERING_CONSULTANT", "PM_CM", "EPC", "GENERAL_CONTRACTOR",
+            "MEP_CONTRACTOR", "TECHNOLOGY_PROVIDER", "SOLUTION_PROVIDER",
+            "EQUIPMENT_SUPPLIER", "VENDOR", "OPERATOR", "FACILITY_MANAGER",
+            "MAINTENANCE_PROVIDER", "GOVERNMENT_PARTNER", "REGULATORY_AUTHORITY",
+            "INDUSTRIAL_PARK", "LANDLORD", "OTHER",
+        ))
+    }
+    project_participations.sort(key=lambda item: min(role_order.get(role, 999) for role in item.roles))
+    for index, participation in enumerate(project_participations):
+        entity = entities[participation.entity_id]
+        roles = sorted(dict.fromkeys(participation.roles), key=lambda role: role_order.get(role, 999))
+        node_id = f"project:{entity.entity_id}"
+        project_node_ids[entity.entity_id] = node_id
+        role_statuses = {role: participation.role_statuses.get(role, "unknown") for role in roles}
+        nodes.append(V3StructureNode(
+            node_id=node_id,
+            entity_id=entity.entity_id,
+            role=" · ".join(readable(role) for role in roles),
+            roles=roles,
+            company=entity.canonical_name,
+            organization_type=entity.organization_type,
+            organization_scope=entity.organization_scope,
+            layer_type="project",
+            role_statuses=role_statuses,
+            temporal_scope=participation.temporal_scope,
+            layer=project_start_layer + index // 3,
+            position=position_cycle[index % 3],
+            required=False,
+            status=strongest(list(role_statuses.values())),
+            evidence=list(dict.fromkeys([*entity.evidence_labels, *participation.evidence_labels])),
+        ))
+
+    relations: list[V3StructureRelation] = []
+    for relation in relmap.canonical_relationships:
+        if relation.status not in visible_statuses:
+            continue
+        if relation.relationship_type in CORPORATE_RELATIONSHIPS:
+            from_node = corporate_node_ids.get(relation.from_entity_id)
+            to_node = corporate_node_ids.get(relation.to_entity_id)
+        else:
+            from_node = project_node_ids.get(relation.from_entity_id)
+            to_node = project_node_ids.get(relation.to_entity_id)
+        if not from_node or not to_node or from_node == to_node:
+            continue
+        label = readable(relation.relationship_type)
+        if relation.relationship_basis:
+            label = f"{label} · {relation.relationship_basis}"
+        relations.append(V3StructureRelation(
+            from_node=from_node,
+            to_node=to_node,
+            relation_type=relation.relationship_type,
+            line_type="SOLID" if relation.status == "confirmed" else "DASHED",
+            direction="FORWARD",
+            label=label,
+            relationship_basis=relation.relationship_basis,
+            description=relation.description,
+            temporal_scope=relation.temporal_scope,
+            status=relation.status,
+            evidence=relation.evidence_labels,
+        ))
+
+    supported_count = sum(node.status in visible_statuses for node in nodes)
+    map_status = "unconfirmed" if not supported_count else "partial" if relmap.research_gaps or pattern in {"OTHER", "UNKNOWN"} else "confirmed"
+    return V3RelationshipMap(
+        structure_id=pattern,
+        structure_name=pattern_name,
+        status=map_status,
+        evidence=evidence,
+        nodes=nodes,
+        relations=relations,
+        research_gaps=relmap.research_gaps,
+    )
+
+
 def build_v3_result(v2: BDV2AnalysisResult, seed: str, extracted: str = "") -> BDV3AnalysisResult:
+    _ensure_canonical_relationship_map(v2)
+    result = _build_v3_result_legacy(v2, seed, extracted)
+    result.relationship_map = _canonical_v3_relationship_map(v2)
+    result.stakeholder_unknowns = list(dict.fromkeys([
+        *result.stakeholder_unknowns,
+        *v2.relationship_map.research_gaps,
+    ]))[:12]
+    return result
+
+
+def _build_v3_result_legacy(v2: BDV2AnalysisResult, seed: str, extracted: str = "") -> BDV3AnalysisResult:
     rules = _read_rulebook()
     combined = f"{seed}\n{extracted}".lower()
     structure_id, structure_name, structure_status, structure_evidence = _structure(v2, combined)
     stage_id, stage_group = _stage(v2)
     actors = v2.relationship_map.actors
-    role_aliases = {"OWNER_HQ": ("owner", "hq"), "OWNER_LOCAL": ("owner", "local"), "EPC": ("epc",), "DESIGN": ("design", "architect", "engineering"), "FI": ("investor", "capital", "pef")}
+    role_aliases = {"PROJECT_OWNER": ("owner", "end client"), "EPC": ("epc",), "DESIGN": ("design", "architect", "engineering"), "INVESTOR": ("investor", "capital", "pef")}
     companies: dict[str, tuple[str, str, list[str]]] = {}
     for node_id, aliases in role_aliases.items():
         actor = next((a for a in actors if any(k in (a.role + " " + a.organization).lower() for k in aliases) and a.organization), None)
@@ -119,7 +510,151 @@ def build_v3_result(v2: BDV2AnalysisResult, seed: str, extracted: str = "") -> B
                 a, b = next(n for n in nodes if n.node_id == row["From_Node"]), next(n for n in nodes if n.node_id == row["To_Node"])
                 status = "confirmed" if a.status == b.status == "confirmed" else "inferred" if a.status != "unknown" and b.status != "unknown" else "unknown"
                 relations.append(V3StructureRelation(from_node=row["From_Node"], to_node=row["To_Node"], relation_type=row["Relation_Type"], line_type=row["Line_Type"], direction=row["Direction"], label=row["Label"], status=status, evidence=list(dict.fromkeys(a.evidence + b.evidence))))
-    relationship = V3RelationshipMap(structure_id=structure_id, structure_name=structure_name, status=structure_status, evidence=structure_evidence, nodes=nodes, relations=relations)
+
+    # Entity-first fallback and enrichment: S1-S4 is a classification result,
+    # never a prerequisite for preserving supported current-project actors.
+    current_project_text = " ".join([
+        v2.opportunity_title,
+        v2.executive_summary,
+        *[item.claim for item in v2.project_intelligence.current_project_facts],
+    ]).casefold()
+    decision_role_tokens = (
+        "owner", "end client", "host", "partner", "investor", "sponsor",
+        "developer", "epc", "contractor", "construction", "design", "engineering",
+        "architect", "pm / cm", "operator", "government", "authority",
+        "industrial park", "landlord",
+    )
+
+    def is_current_project_actor(actor) -> bool:
+        if actor.organization == "UNKNOWN" or actor.temporal_scope != "current":
+            return False
+        if actor.actor_status not in {"confirmed", "likely"}:
+            return False
+        role_text = actor.role.casefold()
+        organization_key = actor.organization.casefold().split("(", 1)[0].strip()
+        directly_mentioned = bool(
+            len(organization_key) >= 4
+            and re.search(
+                rf"(?<!\w){re.escape(organization_key)}(?!\w)", current_project_text
+            )
+        )
+        decision_role = any(token in role_text for token in decision_role_tokens)
+        return directly_mentioned or decision_role
+
+    supported_actors = [actor for actor in actors if is_current_project_actor(actor)]
+    critical_unknowns = [
+        actor for actor in actors
+        if actor.organization == "UNKNOWN"
+        and any(token in actor.role.casefold() for token in ("epc", "architect", "design", "operator"))
+    ]
+    actor_to_node: dict[str, str] = {}
+    company_to_node = {
+        (node.company or "").casefold(): node.node_id for node in nodes if node.company
+    }
+    for actor in supported_actors:
+        existing_id = company_to_node.get(actor.organization.casefold())
+        if existing_id:
+            actor_to_node[actor.actor_id] = existing_id
+            continue
+        layer = 1 if any(token in actor.role.casefold() for token in ("owner", "end client")) else 2
+        same_layer_count = sum(node.layer == layer for node in nodes)
+        position = ("LEFT", "CENTER", "RIGHT")[same_layer_count % 3]
+        display_role = actor.role
+        nodes.append(V3StructureNode(
+            node_id=actor.actor_id,
+            role=display_role,
+            company=actor.organization,
+            layer=layer,
+            position=position,
+            required=False,
+            status=_status(actor.credibility),
+            evidence=actor.evidence_labels,
+        ))
+        actor_to_node[actor.actor_id] = actor.actor_id
+    for actor in critical_unknowns:
+        if actor.actor_id in {node.node_id for node in nodes}:
+            continue
+        same_layer_count = sum(node.layer == 3 for node in nodes)
+        nodes.append(V3StructureNode(
+            node_id=actor.actor_id,
+            role=actor.role,
+            company=None,
+            layer=3,
+            position=("LEFT", "CENTER", "RIGHT")[same_layer_count % 3],
+            required=True,
+            status="unknown",
+            evidence=[],
+        ))
+        actor_to_node[actor.actor_id] = actor.actor_id
+
+    required_gap_roles = {
+        "EPC": ("epc",),
+        "Design / Engineering Consultant": ("architect", "design", "engineering"),
+        "Operator": ("operator",),
+    }
+    for role, aliases in required_gap_roles.items():
+        if any(any(alias in node.role.casefold() for alias in aliases) for node in nodes):
+            continue
+        node_id = "unknown_" + role.casefold().replace(" / ", "_").replace(" ", "_")
+        same_layer_count = sum(node.layer == 3 for node in nodes)
+        nodes.append(V3StructureNode(
+            node_id=node_id,
+            role=role,
+            company=None,
+            layer=3,
+            position=("LEFT", "CENTER", "RIGHT")[same_layer_count % 3],
+            required=True,
+            status="unknown",
+            evidence=[],
+        ))
+
+    known_relation_keys = {(item.from_node, item.to_node, item.label) for item in relations}
+    known_node_ids = {node.node_id for node in nodes}
+    for relation in v2.relationship_map.relationships:
+        from_node = actor_to_node.get(relation.from_actor_id, relation.from_actor_id)
+        to_node = actor_to_node.get(relation.to_actor_id, relation.to_actor_id)
+        if from_node not in known_node_ids or to_node not in known_node_ids or from_node == to_node:
+            continue
+        relation_label = relation.relationship_type
+        relation_evidence_text = " ".join(relation.evidence_labels).casefold()
+        if "mou" in relation_evidence_text and "mou" in current_project_text:
+            relation_label = "MoU / Joint roadmap development"
+        key = (from_node, to_node, relation_label)
+        if key in known_relation_keys:
+            continue
+        relation_status = _status(relation.credibility)
+        relations.append(V3StructureRelation(
+            from_node=from_node,
+            to_node=to_node,
+            relation_type=relation_label,
+            line_type="SOLID" if relation_status == "confirmed" else "DASHED",
+            direction="FORWARD",
+            label=relation_label,
+            status=relation_status,
+            evidence=relation.evidence_labels,
+        ))
+        known_relation_keys.add(key)
+
+    supported_node_count = sum(
+        1 for node in nodes if node.status in {"confirmed", "inferred"} and node.company
+    )
+    unknown_node_count = sum(1 for node in nodes if node.status == "unknown" or not node.company)
+    map_status = (
+        "unconfirmed" if supported_node_count == 0
+        else "partial" if structure_id is None or unknown_node_count
+        else "confirmed"
+    )
+    relationship = V3RelationshipMap(
+        structure_id=structure_id,
+        structure_name=structure_name if structure_id else "Partial / Unclassified",
+        status=map_status,
+        evidence=list(dict.fromkeys(
+            structure_evidence
+            + [label for actor in supported_actors for label in actor.evidence_labels]
+        )),
+        nodes=nodes,
+        relations=relations,
+    )
 
     priorities: dict[str, tuple[int, str]] = {}
     target_meta: dict[str, tuple[str, str]] = {}
@@ -140,9 +675,8 @@ def build_v3_result(v2: BDV2AnalysisResult, seed: str, extracted: str = "") -> B
     targets, unknowns = [], []
     for key, (priority, reason) in priorities.items():
         stakeholder, location = target_meta[key]
-        node_id = "OWNER_HQ" if stakeholder == "Project Owner" and location == "HQ" else "OWNER_LOCAL" if stakeholder == "Project Owner" else "DESIGN" if stakeholder == "Design/Engineering" else stakeholder.upper()
+        node_id = "PROJECT_OWNER" if stakeholder == "Project Owner" else "DESIGN" if stakeholder == "Design/Engineering" else stakeholder.upper()
         company, status, evidence = companies.get(node_id, (None, "unknown", []))
-        if stakeholder == "Project Owner" and location == "HQ" and not company: continue
         role = stakeholder + (f" — {location}" if location != "-" else "")
         functions = ["Investment / Project Management"] if stakeholder == "Project Owner" else ["Project Management / Procurement"] if stakeholder == "EPC" else ["Engineering / Specification"] if stakeholder == "Design/Engineering" else []
         targets.append(V3StakeholderTarget(stakeholder_type=node_id, role=role, company=company, target_function=functions, priority=priority, evidence_strength="strong" if status == "confirmed" else "medium" if status == "inferred" else "weak", reason=reason, evidence=evidence))
