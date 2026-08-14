@@ -35,9 +35,9 @@ def _render_entry_hero() -> None:
     st.markdown(
         """
         <section class="bd-entry-hero">
-          <div class="bd-entry-eyebrow">VIETNAM MANUFACTURING · BD INTELLIGENCE</div>
-          <h1>Find the opportunity<br>behind the news.</h1>
-          <p>뉴스에서 사업기회를 발견하고, Samsung DX 관점의 다음 영업 행동까지 연결합니다.</p>
+          <div class="bd-entry-eyebrow">베트남 제조업 · 영업 기회 분석</div>
+          <h1>뉴스 속 영업 기회를<br>분석하세요.</h1>
+          <p>프로젝트 단계와 핵심 관계자를 파악하고 다음 영업 행동을 제안합니다.</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -81,13 +81,13 @@ def render():
 
     if st.session_state.bd_stage not in {"input", "context"}:
         st.markdown(
-            "<div class='hero'><h1>Vietnam Manufacturing BD Agent</h1>"
+            "<div class='hero'><h1>베트남 제조업 영업 기회 분석</h1>"
             "<p>아는 정보나 뉴스를 넣으면, 사업기회 관점으로 확장하고 첫 미팅에서 무엇을 알아와야 할지 안내합니다.</p></div>",
             unsafe_allow_html=True,
         )
 
     with st.sidebar:
-        if st.button("＋ 새 분석", use_container_width=True):
+        if st.button("＋ 새 기회 분석", use_container_width=True):
             for key in (
                 "bd_stage",
                 "bd_result",
@@ -106,7 +106,7 @@ def render():
                 st.session_state.pop(key, None)
             st.rerun()
 
-        with st.expander("저장된 분석 이력", expanded=False):
+        with st.expander("최근 분석", expanded=False):
             history_items = list_analyses()
             if not history_items:
                 st.caption("아직 저장된 분석이 없습니다.")
@@ -127,11 +127,11 @@ def render():
                         st.session_state.bd_stage = "result"
                         st.rerun()
 
-        with st.expander("고급 설정", expanded=False):
-            engine = st.radio("분석 엔진", ["BD v3", "BD v2", "기존 BD"], key="bd_engine")
-            demo_mode = st.checkbox("데모 모드", value=not bool(os.getenv("OPENAI_API_KEY")))
-            st.caption("데모 모드는 API 호출 없이 예시 결과를 표시합니다.")
-            closed_demo = st.checkbox("Closed 데모", value=False) if engine in {"BD v2", "BD v3"} and demo_mode else False
+        with st.expander("분석 설정", expanded=False):
+            engine = st.radio("분석 방식", ["BD v3", "BD v2", "기존 BD"], key="bd_engine")
+            demo_mode = st.checkbox("예시 데이터로 보기", value=not bool(os.getenv("OPENAI_API_KEY")))
+            st.caption("외부 정보 조회 없이 예시 결과를 표시합니다.")
+            closed_demo = st.checkbox("종료 단계 예시 보기", value=False) if engine in {"BD v2", "BD v3"} and demo_mode else False
             developer_mode = st.checkbox("개발 모드 · Research Trace", value=False) if engine in {"BD v2", "BD v3"} else False
 
     if st.session_state.bd_stage == "input":
@@ -141,31 +141,31 @@ def render():
 
         with st.container(key="bd_entry_composer"):
             seed = st.text_area(
-                "분석할 뉴스",
+                "분석할 정보",
                 value=st.session_state.bd_seed,
                 height=150,
-                placeholder="뉴스 URL 또는 기사 내용을 입력하세요",
+                placeholder="뉴스 URL, 기사 내용 또는 프로젝트 정보를 입력하세요",
                 label_visibility="collapsed",
             )
             spacer_col, upload_col, action_col = st.columns([4.5, 1.5, 1.7], vertical_alignment="center")
             spacer_col.empty()
-            with upload_col.popover("＋ PDF 첨부", use_container_width=True):
+            with upload_col.popover("PDF 추가", use_container_width=True):
                 uploaded = st.file_uploader(
                     "PDF/TXT/MD 파일",
                     type=["pdf", "txt", "md"],
                     label_visibility="collapsed",
                 )
-            analyze_clicked = action_col.button("Analyze →", type="primary", use_container_width=True)
+            analyze_clicked = action_col.button("영업 기회 분석하기", type="primary", use_container_width=True)
 
         st.markdown(
-            '<div class="bd-entry-outcomes">사업단계 · 미팅 전략 · 토킹 포인트 · 확인 필요사항</div>'
-            '<div class="bd-entry-privacy">공개 정보 또는 가명 데이터를 사용하세요. 실제 회사 기밀정보는 입력하지 마세요.</div>',
+            '<div class="bd-entry-outcomes">사업 단계부터 접촉 대상과 다음 행동까지 확인합니다.</div>'
+            '<div class="bd-entry-privacy">공개 정보나 가명 데이터만 입력하세요. 회사 기밀은 입력하지 마세요.</div>',
             unsafe_allow_html=True,
         )
 
         if analyze_clicked:
             if not seed.strip() and uploaded is None:
-                st.warning("텍스트, URL 또는 파일 중 하나를 입력하세요.")
+                st.warning("분석할 URL, 내용 또는 파일을 추가해주세요.")
             else:
                 st.session_state.bd_seed = seed
                 st.session_state.bd_uploaded_bytes = uploaded.getvalue() if uploaded else None
@@ -177,8 +177,8 @@ def render():
         _render_entry_hero()
         with st.container(key="bd_project_context"):
             st.markdown(
-                '<div class="bd-context-head"><h2>알고 계신 내용을 공유해주세요</h2>'
-                '<p>모든 항목은 선택사항입니다. 비워둔 채 분석해도 됩니다.</p></div>',
+                '<div class="bd-context-head"><h2>알고 있는 프로젝트 정보를 추가해주세요</h2>'
+                '<p>선택사항입니다. 비워두어도 분석할 수 있습니다.</p></div>',
                 unsafe_allow_html=True,
             )
             st.markdown('<div class="bd-context-label">건축 유형</div>', unsafe_allow_html=True)
@@ -203,7 +203,7 @@ def render():
 
             st.markdown(
                 '<div class="bd-context-question">'
-                '<h3>알고 있는 정보와 특별히 확인하고 싶은 내용을 자유롭게 작성해주세요.</h3>'
+                '<h3>알고 있는 정보나 확인하고 싶은 내용을 적어주세요.</h3>'
                 '<p>사업주, 시공사, 설계사 등 현재 파악된 정보가 많을수록 분석이 정교해지며, '
                 '궁금한 내용을 함께 알려주시면 <strong>해당 정보에 초점을 맞춰 더 깊이 탐색합니다.</strong></p>'
                 '</div>',
@@ -219,7 +219,7 @@ def render():
 
             back_col, action_col = st.columns([1, 2.2], vertical_alignment="center")
             back_clicked = back_col.button("← 이전", use_container_width=True)
-            analyze_context_clicked = action_col.button("분석 실행 →", type="primary", use_container_width=True)
+            analyze_context_clicked = action_col.button("영업 기회 분석하기", type="primary", use_container_width=True)
 
         if back_clicked:
             st.session_state.bd_stage = "input"
@@ -228,39 +228,37 @@ def render():
             guided = _project_context()
 
             if engine in {"BD v2", "BD v3"}:
-                status = st.status(f"{engine} 분석을 시작합니다.", expanded=True)
+                status = st.status("영업 기회 분석을 시작합니다.", expanded=True)
 
                 def progress(event: str, details: dict) -> None:
                     if event == "seed_understanding":
-                        status.write("Seed 이해 중")
+                        status.write("입력 내용 파악 중")
                     elif event == "context_research":
-                        status.write("기본 Context 조사 중")
+                        status.write("프로젝트 기본 정보 확인 중")
                     elif event == "context_research_supplement":
-                        status.write(f"Context 보완 조사 {details['attempt']}/{details['maximum']} · {', '.join(details.get('missing', []))}")
+                        status.write(f"부족한 프로젝트 정보 추가 확인 {details['attempt']}/{details['maximum']}")
                     elif event == "context_arbitration":
-                        status.write("사업단계와 4축 Context 판단 중")
+                        status.write("사업 단계와 핵심 맥락 정리 중")
                     elif event == "stage_gate":
-                        status.write(
-                            f"Stage Gate: {details['status']} · Research: {details['research_depth']} · Pursuit: {details['active_pursuit']}"
-                        )
+                        status.write(f"영업 접근 구간 판단 완료 · {details['status']}")
                     elif event == "research_round":
                         mode_label = {
                             "deep": "심층 조사",
                             "limited": "제한 조사",
-                            "historical": "Historical 조사",
+                            "historical": "과거 사례 조사",
                         }.get(details["mode"], details["mode"])
                         status.write(
-                            f"{mode_label} Round {details['round']}/{details['total_rounds']} · {details['focus']}"
+                            f"{mode_label} {details['round']}/{details['total_rounds']} · {details['focus']}"
                         )
                     elif event == "research_round_complete":
                         status.write(
-                            f"Round {details['round']}/{details['total_rounds']} 완료 · "
-                            f"신규 Entity {details['discovered_entities']} · 남은 Gap {details['remaining_gaps']}"
+                            f"추가 조사 {details['round']}/{details['total_rounds']} 완료 · "
+                            f"새로 확인한 관계자 {details['discovered_entities']} · 남은 확인 항목 {details['remaining_gaps']}"
                         )
                     elif event == "sales_reasoning":
                         status.write("영업 분석 생성 중")
                     elif event == "complete":
-                        status.update(label=f"{engine} 상세 분석 완료", state="complete", expanded=False)
+                        status.update(label="영업 기회 분석이 완료되었습니다.", state="complete", expanded=False)
 
                 try:
                     analysis_run = analyze_project(
@@ -278,8 +276,8 @@ def render():
                     result = analysis_run.result
                     st.session_state.bd_v2_research_trace = analysis_run.research_trace
                     if demo_mode:
-                        status.write("Mock v2 전체 결과 생성 완료")
-                        status.update(label=f"{engine} 데모 분석 완료", state="complete", expanded=False)
+                        status.write("예시 분석 결과 생성 완료")
+                        status.update(label="예시 영업 기회 분석이 완료되었습니다.", state="complete", expanded=False)
                     st.session_state.bd_result = result.model_dump()
                     st.session_state.bd_result_version = analysis_run.result_version
                     st.session_state.bd_history_id = save_analysis(
@@ -365,7 +363,7 @@ def render():
                 render_next_steps(result)
 
         st.download_button(
-            "분석 결과 JSON 다운로드",
+            "분석 결과 내보내기",
             data=json.dumps(result.model_dump(), ensure_ascii=False, indent=2),
             file_name=f"opportunity_analysis_{st.session_state.bd_result_version}.json",
             mime="application/json",
