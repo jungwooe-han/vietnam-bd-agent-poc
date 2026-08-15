@@ -10,13 +10,13 @@ from src.vietnam_bd.localization_v3 import ui
 from src.vietnam_bd.ui_components_v3 import (
     STAGE_LABELS,
     _compact_fact_value,
-    _decision_guidance,
     _display_value,
     _evidence_label,
     _location_map_rows,
     _location_search_query,
     _location_zoom,
     _public_progress_events,
+    _sales_stage_guidance,
     _source_popover,
     _source_rows,
     _stage_index,
@@ -51,11 +51,34 @@ class OpportunityUIHelpersTest(unittest.TestCase):
     def test_why_now_is_sales_guidance_not_engine_flags(self) -> None:
         result = build_v3_result(demo_v2_result(), "demo")
 
-        guide, _ = _decision_guidance(result)
+        guide, _ = _sales_stage_guidance(result)
 
-        self.assertIn("현재 사업단계", guide)
-        self.assertIn("접촉", guide)
+        self.assertIn("현재 프로젝트", guide)
+        self.assertIn("지금은", guide)
         self.assertNotIn("Lifecycle=", guide)
+        self.assertNotIn("공개 근거", guide)
+        self.assertNotIn("Evidence", guide)
+
+    def test_stage_guidance_varies_for_three_sales_contexts(self) -> None:
+        planning = build_v3_result(demo_v2_result(), "planning")
+        planning.project_stage.value = "사업기획"
+        planning.v2_snapshot.context.business_stage.claim = "사업기획"
+
+        design = build_v3_result(demo_v2_result(), "design")
+        construction = build_v3_result(
+            demo_v2_result(decision="monitor"), "construction"
+        )
+
+        planning_guide, _ = _sales_stage_guidance(planning)
+        design_guide, _ = _sales_stage_guidance(design)
+        construction_guide, _ = _sales_stage_guidance(construction)
+
+        self.assertIn("EPC 선정 현황", planning_guide)
+        self.assertIn("사양 확정 일정", design_guide)
+        self.assertIn("미발주 패키지", construction_guide)
+        self.assertEqual(len({planning_guide, design_guide, construction_guide}), 3)
+        for guide in (planning_guide, design_guide, construction_guide):
+            self.assertLessEqual(guide.count("."), 3)
 
     def test_overview_fact_values_are_compact_but_keep_source_claim(self) -> None:
         item = IntelligenceItem(

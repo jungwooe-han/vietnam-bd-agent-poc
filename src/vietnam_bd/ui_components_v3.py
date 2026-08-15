@@ -99,6 +99,13 @@ def _safe(value: object) -> str:
     return html.escape(str(value or "Not confirmed"))
 
 
+def _safe_emphasis(value: object) -> str:
+    """Escape copy while allowing bounded **strong** emphasis."""
+
+    escaped = _safe(value)
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+
+
 def _badge(value: str, language: str = "ko") -> str:
     state = _safe(value).lower()
     labels = {
@@ -602,13 +609,11 @@ def _project_overview(result: BDV3AnalysisResult) -> None:
         project_col, location_col = st.columns([2, 1], gap="large")
         with project_col:
             st.markdown(
-                f"<div class='v3-overview-facts'>{facts_html}</div>{needs_html}",
+                f"<div class='v3-overview-facts'>{facts_html}</div>{timeline_html}{needs_html}",
                 unsafe_allow_html=True,
             )
         with location_col:
             _site_location_card(intelligence.project_location)
-        if timeline_html:
-            st.markdown(timeline_html, unsafe_allow_html=True)
 
 
 def _stage_index(value: str) -> int | None:
@@ -688,6 +693,108 @@ def _decision_guidance(result: BDV3AnalysisResult) -> tuple[str, list[str]]:
     if not facts:
         facts = [_short(item.claim) for item in result.v2_snapshot.project_intelligence.current_project_facts[:2]]
     return guide, facts
+
+
+def _sales_stage_guidance(result: BDV3AnalysisResult) -> tuple[str, list[str]]:
+    """Create a short sales explanation from existing analysis outputs only."""
+
+    v2 = result.v2_snapshot
+    stage_index = _stage_index(result.project_stage.value)
+    stage = STAGE_LABELS[stage_index] if stage_index is not None else _display_label(result.project_stage.value)
+    known_actors = [
+        actor for actor in v2.relationship_map.actors
+        if actor.temporal_scope == "current" and actor.actor_status in {"confirmed", "likely"}
+    ]
+    epc = next(
+        (actor for actor in known_actors if any(token in actor.role.casefold() for token in ("epc", "general contractor", "gc"))),
+        None,
+    )
+    epc_name = _display_value(getattr(epc, "organization", None)) if epc else "Not identified"
+
+    gap_parts = [
+        *result.relationship_map.research_gaps,
+        *v2.relationship_map.research_gaps,
+        *v2.relationship_map.unknown_critical_actors,
+        *result.stakeholder_unknowns,
+        *v2.project_intelligence.unresolved_gaps,
+        *(item.topic for item in v2.information_to_confirm),
+    ]
+    signal_parts = [
+        *gap_parts,
+        *(item.claim for item in v2.project_intelligence.current_project_facts),
+        *(item.claim for item in v2.project_intelligence.open_scopes),
+        *v2.project_intelligence.watch_signals,
+        v2.project_intelligence.next_trigger,
+        v2.can_we_enter.timing.rationale,
+        v2.can_we_enter.openness.rationale,
+    ]
+    gap_text = " ".join(str(part) for part in gap_parts).casefold()
+    signal_text = " ".join(str(part) for part in signal_parts).casefold()
+
+    def has(text: str, *tokens: str) -> bool:
+        return any(token in text for token in tokens)
+
+    epc_unknown = epc_name == "Not identified" and has(gap_text, "epc", "gc", "contractor", "시공사")
+    design_unknown = has(gap_text, "architect", "design", "engineering", "spec", "설계", "사양")
+    investment_unknown = has(gap_text, "investment", "funding", "capital", "budget", "투자", "자금", "예산")
+    procurement_unknown = has(gap_text, "procurement", "tender", "vendor", "award", "발주", "조달", "구매")
+    open_scope = bool(v2.project_intelligence.open_scopes) or has(
+        signal_text, "open scope", "remains open", "unawarded", "미발주", "열려"
+    )
+
+    if stage_index is None:
+        stage_sentence = f"현재 프로젝트 단계는 **{stage}**이며, 다음 의사결정 시점은 아직 확인되지 않았습니다."
+    else:
+        stage_sentence = f"현재 프로젝트는 **{stage} 단계**로 확인됩니다."
+
+    if result.status == "closed" or stage_index == 8:
+        meaning = "현재 프로젝트의 신규 발주 기회는 대부분 종료된 것으로 보여, **운영 이후의 별도 기회로 구분해 볼 필요가 있습니다.**"
+        action = "지금은 **O&M·리트로핏 수요와 후속 확장 계획을 확인할 시점**입니다."
+    elif stage_index is not None and stage_index >= 7:
+        if open_scope or procurement_unknown:
+            meaning = "공사가 진행 중이지만 **일부 공급 범위나 조달 주체는 아직 열려 있을 가능성이 있습니다.**"
+            action = "지금은 **미발주 패키지와 현장 구매 담당자, 변경 가능 범위를 확인할 시점**입니다."
+        else:
+            meaning = "주요 설계와 시공 구조가 이미 정해졌을 가능성이 높아 **신규 사양 반영 여지는 제한적일 수 있습니다.**"
+            action = "지금은 **현장 변경 요청과 추가 공사 범위가 남아 있는지 확인할 시점**입니다."
+    elif stage_index is not None and 3 <= stage_index <= 6:
+        if design_unknown:
+            meaning = "설계가 진행 중이지만 **주요 사양의 결정 일정과 영향 주체는 아직 확인되지 않았습니다.**"
+            action = "지금은 **사양 확정 일정과 설계·기술 승인 담당자를 확인하고 제안 범위를 준비할 시점**입니다."
+        elif procurement_unknown or open_scope:
+            meaning = "설계 방향은 구체화되고 있으나 **발주 범위와 공급사 선정 절차가 아직 열려 있을 가능성이 있습니다.**"
+            action = "지금은 **발주 일정과 공급사 등록·선정 절차를 확인할 시점**입니다."
+        elif epc_unknown:
+            meaning = "설계 단계에 진입했지만 **EPC/시공사와 실행 책임 조직은 아직 확인되지 않았습니다.**"
+            action = "지금은 **EPC 선정 현황과 설계 영향 주체를 확인할 시점**입니다."
+        else:
+            meaning = f"**EPC/시공사 {epc_name}**가 확인돼 실행 구조가 구체화되고 있습니다."
+            action = "지금은 **담당 조직과 조달 일정을 확인해 남은 제안 범위를 좁힐 시점**입니다."
+    else:
+        if investment_unknown:
+            meaning = "사업 구상은 확인됐지만 **투자 승인과 자금 집행 일정은 아직 정해지지 않은 것으로 보입니다.**"
+            if epc_unknown:
+                action = "지금은 **투자 승인 일정과 실제 의사결정자, EPC 선정 계획을 함께 확인할 시점**입니다."
+            else:
+                action = "지금은 **투자 승인 일정과 실제 의사결정자를 확인할 시점**입니다."
+        elif epc_unknown and design_unknown:
+            meaning = "아직 **EPC/시공사와 주요 사양의 결정 주체가 확인되지 않아**, 사업 구조가 확정되기 전일 가능성이 있습니다."
+            action = "지금은 **EPC 선정 현황과 사양 결정 일정, 향후 발주 계획을 확인할 적기**입니다."
+        elif epc_unknown:
+            meaning = "아직 **EPC/시공사와 실행 담당 조직이 확인되지 않아**, 주요 사업 구조가 정해지기 전일 가능성이 있습니다."
+            action = "지금은 **EPC 선정 현황과 향후 발주 일정을 확인할 적기**입니다."
+        elif design_unknown:
+            meaning = "사업 방향은 확인됐지만 **설계·사양을 누가 언제 결정하는지는 아직 확인되지 않았습니다.**"
+            action = "지금은 **사양 결정 일정과 영향 주체를 확인해 초기 제안 접점을 만들 시점**입니다."
+        else:
+            meaning = "초기 사업 구조가 구체화되는 단계로, **아직 관계 형성과 요구사항 반영 여지가 있을 가능성이 있습니다.**"
+            action = "지금은 **다음 의사결정 일정과 핵심 관계자의 우선 과제를 확인할 시점**입니다."
+
+    timeline = _public_progress_events(result)[:2]
+    facts = [f"{item['date']}: {_short(item['milestone'])}" for item in timeline]
+    if not facts:
+        facts = [_short(item.claim) for item in v2.project_intelligence.current_project_facts[:2]]
+    return " ".join((stage_sentence, meaning, action)), facts
 
 
 def _node_actor(result: BDV3AnalysisResult, node: object) -> object | None:
@@ -864,12 +971,12 @@ def render_page_1_opportunity_v3(result: BDV3AnalysisResult, language: str = "ko
     state = _safe(result.status).lower()
     decision = result.v2_snapshot.bd_decision
     trigger = decision.trigger_to_reassess or result.v2_snapshot.project_intelligence.next_trigger or "Not identified"
-    guide, recent_facts = _decision_guidance(result)
+    guide, recent_facts = _sales_stage_guidance(result)
     facts_html = "".join(f"<li>{_safe(item)}</li>" for item in recent_facts)
     status_label = {"now": "지금 접촉", "monitor": "추적 관찰", "closed": "현재 기회 종료"}.get(state, _display_label(state))
     st.markdown(
         f"<div class='v3-decision {state}'><div><div class='v3-decision-label'>영업 판단</div><div class='v3-decision-status'>{_safe(status_label)}</div></div>"
-        f"<div><div class='v3-decision-label'>왜 지금 움직여야 하나요?</div><div class='v3-decision-guide'>{_safe(guide)}</div><ul class='v3-decision-facts'>{facts_html}</ul></div>"
+        f"<div><div class='v3-decision-label'>왜 지금 움직여야 하나요?</div><div class='v3-decision-guide'>{_safe_emphasis(guide)}</div><ul class='v3-decision-facts'>{facts_html}</ul></div>"
         f"<div class='v3-decision-trigger'><div class='v3-decision-label'>다음 확인 신호</div><div class='v3-decision-copy'>{_safe(_display_label(trigger))}</div></div></div>",
         unsafe_allow_html=True,
     )

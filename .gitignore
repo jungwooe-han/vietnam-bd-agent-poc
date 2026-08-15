@@ -17,6 +17,7 @@ data/firecrawl_ab_results.jsonl
 data/firecrawl_live_result.json
 data/vsip_full_ab_result.json
 data/ab_live_*.log
+streamlit-*.log
 
 # original standalone-agent archives (superseded by src/lead_sensing, src/vietnam_bd)
 lead-sensing-agent/
