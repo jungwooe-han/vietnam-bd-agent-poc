@@ -269,12 +269,274 @@ def _ensure_canonical_relationship_map(v2: BDV2AnalysisResult) -> None:
     ]))[:12]
 
 
+def _entity_alias_keys(entity: EntityIdentity) -> set[str]:
+    """Return conservative identity keys for spelling/suffix variants.
+
+    This intentionally does not attempt fuzzy company matching. It only folds
+    common legal suffixes, Tech/Technology, slash-separated aliases, and word
+    order in government-authority labels.
+    """
+
+    values = [entity.canonical_name, *entity.aliases]
+    keys: set[str] = set()
+    suffixes = {
+        "co", "company", "corp", "corporation", "inc", "incorporated",
+        "ltd", "limited", "llc", "jsc", "tnhh",
+    }
+    government_words = {"ubnd", "authority", "authorities", "provincial", "province", "of", "the"}
+    for value in values:
+        for alias in re.split(r"\s*/\s*", value):
+            normalized = re.sub(r"\btech\b", "technology", alias.casefold())
+            tokens = re.findall(r"[a-z0-9]+", normalized)
+            tokens = [token for token in tokens if token not in suffixes]
+            if not tokens:
+                continue
+            if "ubnd" in tokens or "authorities" in tokens or "authority" in tokens:
+                place = sorted(token for token in tokens if token not in government_words)
+                keys.add("government:" + "-".join(place))
+            else:
+                keys.add("company:" + "-".join(tokens))
+    return keys
+
+
+def _merge_status(values: list[str]) -> str:
+    return next((status for status in ("confirmed", "likely", "candidate", "unknown") if status in values), "unknown")
+
+
+def _normalize_canonical_relationship_map(v2: BDV2AnalysisResult) -> None:
+    """Normalize duplicate identities and prevent contract-scope role inflation."""
+
+    relmap = v2.relationship_map
+    if not relmap.entities:
+        return
+
+    # Merge only entities sharing a conservative normalized alias key.
+    groups: list[list[EntityIdentity]] = []
+    group_keys: list[set[str]] = []
+    for entity in relmap.entities:
+        keys = _entity_alias_keys(entity)
+        match_index = next((index for index, known in enumerate(group_keys) if keys & known), None)
+        if match_index is None:
+            groups.append([entity])
+            group_keys.append(set(keys))
+        else:
+            groups[match_index].append(entity)
+            group_keys[match_index].update(keys)
+
+    entity_remap: dict[str, str] = {}
+    merged_entities: list[EntityIdentity] = []
+    scope_order = {"local_entity": 0, "global_hq": 1, "regional_hq": 2, "project_company": 3, "unknown": 4}
+    for group in groups:
+        preferred = min(
+            group,
+            key=lambda item: (
+                "/" in item.canonical_name,
+                scope_order.get(item.organization_scope, 9),
+                len(item.canonical_name),
+            ),
+        )
+        preferred_id = (
+            canonical_entity_id(preferred.canonical_name)
+            if preferred.entity_id in {"org:unknown", "unknown", ""}
+            else preferred.entity_id
+        )
+        for entity in group:
+            entity_remap[entity.entity_id] = preferred_id
+        merged_entities.append(preferred.model_copy(update={
+            "entity_id": preferred_id,
+            "aliases": list(dict.fromkeys(
+                alias for entity in group
+                for alias in [entity.canonical_name, *entity.aliases]
+                if alias != preferred.canonical_name
+            ))[:10],
+            "status": _merge_status([entity.status for entity in group]),
+            "evidence_labels": list(dict.fromkeys(label for entity in group for label in entity.evidence_labels))[:8],
+            "source_urls": list(dict.fromkeys(url for entity in group for url in entity.source_urls))[:8],
+            "source_dates": list(dict.fromkeys(value for entity in group for value in entity.source_dates))[:8],
+            "legacy_entity_types": list(dict.fromkeys(value for entity in group for value in entity.legacy_entity_types))[:8],
+        }))
+    relmap.entities = merged_entities
+
+    participation_groups: dict[tuple[str, str], list[ProjectParticipation]] = defaultdict(list)
+    for item in relmap.participations:
+        item.entity_id = entity_remap.get(item.entity_id, item.entity_id)
+        participation_groups[(item.project_id, item.entity_id)].append(item)
+    merged_participations: list[ProjectParticipation] = []
+    for (_project_id, _entity_id), items in participation_groups.items():
+        first = items[0]
+        roles = list(dict.fromkeys(role for item in items for role in item.roles))
+        role_statuses = {
+            role: _merge_status([
+                item.role_statuses.get(role, "unknown") for item in items if role in item.roles
+            ])
+            for role in roles
+        }
+        merged_participations.append(first.model_copy(update={
+            "roles": roles,
+            "role_statuses": role_statuses,
+            "temporal_scope": "current" if any(item.temporal_scope == "current" for item in items) else first.temporal_scope,
+            "evidence_labels": list(dict.fromkeys(label for item in items for label in item.evidence_labels))[:8],
+            "source_urls": list(dict.fromkeys(url for item in items for url in item.source_urls))[:8],
+            "source_dates": list(dict.fromkeys(value for item in items for value in item.source_dates))[:8],
+        }))
+    relmap.participations = merged_participations
+
+    for relation in relmap.canonical_relationships:
+        relation.from_entity_id = entity_remap.get(relation.from_entity_id, relation.from_entity_id)
+        relation.to_entity_id = entity_remap.get(relation.to_entity_id, relation.to_entity_id)
+    entity_lookup = {entity.entity_id: entity for entity in relmap.entities}
+    for relation in relmap.canonical_relationships:
+        if relation.relationship_type != "SUBSIDIARY_OF":
+            continue
+        source = entity_lookup.get(relation.from_entity_id)
+        target = entity_lookup.get(relation.to_entity_id)
+        if source and target and source.organization_scope in {"global_hq", "regional_hq"} and target.organization_scope == "local_entity":
+            relation.from_entity_id, relation.to_entity_id = relation.to_entity_id, relation.from_entity_id
+    relation_groups: dict[tuple[str, str, str], list[CanonicalRelationship]] = defaultdict(list)
+    for relation in relmap.canonical_relationships:
+        if relation.from_entity_id != relation.to_entity_id:
+            relation_groups[(relation.from_entity_id, relation.to_entity_id, relation.relationship_type)].append(relation)
+    relmap.canonical_relationships = [
+        items[0].model_copy(update={
+            "status": _merge_status([item.status for item in items]),
+            "evidence_labels": list(dict.fromkeys(label for item in items for label in item.evidence_labels))[:8],
+            "source_urls": list(dict.fromkeys(url for item in items for url in item.source_urls))[:8],
+            "source_dates": list(dict.fromkeys(value for item in items for value in item.source_dates))[:8],
+        })
+        for items in relation_groups.values()
+    ]
+
+    for influence in relmap.decision_influences:
+        influence.entity_id = entity_remap.get(influence.entity_id, influence.entity_id)
+    influence_groups: dict[tuple[str, str], list[DecisionInfluence]] = defaultdict(list)
+    for influence in relmap.decision_influences:
+        influence_groups[(influence.entity_id, influence.domain)].append(influence)
+    relmap.decision_influences = [
+        items[0].model_copy(update={"status": _merge_status([item.status for item in items])})
+        for items in influence_groups.values()
+    ]
+
+    # A bounded M&E / fit-out award supports an MEP contractor role, not an
+    # EPC or general-contractor role unless the source explicitly says so.
+    scoped_contractors: set[str] = set()
+    for relation in relmap.canonical_relationships:
+        text = f"{relation.relationship_basis} {relation.description}".casefold()
+        scoped = any(token in text for token in ("m&e", "mep", "mechanical & electrical", "mechanical and electrical", "fit-out", "fit out"))
+        explicit_epc_or_gc = bool(re.search(r"\bepc\b|general contractor|engineering[, /-]+procurement[, /-]+construction", text))
+        if relation.relationship_type == "AWARDS_CONTRACT_TO" and scoped and not explicit_epc_or_gc:
+            scoped_contractors.add(relation.to_entity_id)
+    for item in relmap.participations:
+        if item.entity_id not in scoped_contractors:
+            continue
+        old_roles = set(item.roles)
+        if not old_roles.intersection({"EPC", "GENERAL_CONTRACTOR"}):
+            continue
+        roles = [role for role in item.roles if role not in {"EPC", "GENERAL_CONTRACTOR"}]
+        roles.append("MEP_CONTRACTOR")
+        statuses = [item.role_statuses.get(role, "unknown") for role in old_roles]
+        item.roles = list(dict.fromkeys(roles))
+        item.role_statuses = {
+            **{role: status for role, status in item.role_statuses.items() if role in item.roles},
+            "MEP_CONTRACTOR": _merge_status(statuses),
+        }
+
+    # Research discovery is broader than current-project participation. Keep
+    # ecosystem leads in the source model, but demote them from the confirmed
+    # decision map unless evidence ties them directly to this project.
+    entity_lookup = {entity.entity_id: entity for entity in relmap.entities}
+    candidate_entities: set[str] = set()
+    person_title_pattern = re.compile(
+        r"\b(deputy prime minister|prime minister|minister|vice minister|chairman|president|director general|mr|ms|dr)\b",
+        re.IGNORECASE,
+    )
+    candidate_signals = (
+        "intended user", "potential user", "representative universities",
+        "named participant / collaborator", "user at forum", "participants / intended users",
+        "authorized distributor", "distributor channel", "distributor pages",
+        "authorized lines", "maintenance/warranty agent", "local channel",
+        "event attendee", "meeting with", "delegation",
+    )
+    direct_project_signals = (
+        "mou signatory", "memorandum of understanding", "mou", "co-development",
+        "project owner", "developer", "contract award",
+        "awarded contract", "site location", "environmental permit", "land agreement",
+    )
+    relation_text_by_entity: dict[str, list[str]] = defaultdict(list)
+    for relation in relmap.canonical_relationships:
+        text = " ".join([
+            relation.relationship_basis,
+            relation.description,
+            *relation.evidence_labels,
+        ]).casefold()
+        relation_text_by_entity[relation.from_entity_id].append(text)
+        relation_text_by_entity[relation.to_entity_id].append(text)
+    for item in relmap.participations:
+        entity = entity_lookup.get(item.entity_id)
+        if not entity:
+            continue
+        evidence_text = " ".join([
+            entity.canonical_name,
+            *entity.evidence_labels,
+            *item.evidence_labels,
+            *relation_text_by_entity.get(item.entity_id, []),
+        ]).casefold()
+        looks_like_person = bool(person_title_pattern.search(entity.canonical_name))
+        broad_ecosystem_only = (
+            any(signal in evidence_text for signal in candidate_signals)
+            and not any(signal in evidence_text for signal in direct_project_signals)
+        )
+        if looks_like_person or broad_ecosystem_only:
+            candidate_entities.add(item.entity_id)
+            item.temporal_scope = "candidate"
+            item.role_statuses = {role: "candidate" for role in item.roles}
+
+    for relation in relmap.canonical_relationships:
+        text = " ".join([
+            relation.relationship_basis,
+            relation.description,
+            *relation.evidence_labels,
+        ]).casefold()
+        meeting_only_investment = (
+            relation.relationship_type == "INVESTS_IN"
+            and any(token in text for token in ("meeting", "delegation", "political engagement", "facilitation"))
+            and not any(token in text for token in ("equity", "shareholding", "capital contribution", "investment amount", "funding"))
+        )
+        ecosystem_relation = (
+            relation.from_entity_id in candidate_entities
+            or relation.to_entity_id in candidate_entities
+            or any(token in text for token in ("intended partners", "intended users", "distributor channel", "authorized distributor"))
+        )
+        if meeting_only_investment or ecosystem_relation:
+            relation.status = "candidate"
+            relation.temporal_scope = "candidate"
+
+    confirmed_roles = {
+        role for item in relmap.participations if item.temporal_scope == "current"
+        for role in item.roles if item.role_statuses.get(role) in {"confirmed", "likely"}
+    }
+    gap_role_tokens = {
+        "investor": "INVESTOR", "project owner": "PROJECT_OWNER", "owner": "PROJECT_OWNER",
+        "epc": "EPC", "general contractor": "GENERAL_CONTRACTOR", "operator": "OPERATOR",
+        "design": "ENGINEERING_CONSULTANT", "engineering": "ENGINEERING_CONSULTANT",
+    }
+    relmap.research_gaps = [
+        gap for gap in relmap.research_gaps
+        if not any(token in gap.casefold() and role in confirmed_roles for token, role in gap_role_tokens.items())
+    ][:12]
+
+
 def _classify_structure(v2: BDV2AnalysisResult) -> tuple[str, str, str, list[str]]:
     relmap = v2.relationship_map
     roles_by_entity = {item.entity_id: set(item.roles) for item in relmap.participations}
     all_roles = {role for roles in roles_by_entity.values() for role in roles}
     epc_entities = {entity_id for entity_id, roles in roles_by_entity.items() if "EPC" in roles}
-    investor_present = "INVESTOR" in all_roles
+    entities = {entity.entity_id: entity for entity in relmap.entities}
+    investor_present = any(
+        "INVESTOR" in roles
+        and entities.get(entity_id)
+        and entities[entity_id].organization_type == "FINANCIAL_INSTITUTION"
+        for entity_id, roles in roles_by_entity.items()
+    )
     epc_invests = any(
         relation.from_entity_id in epc_entities
         and relation.relationship_type in {"INVESTS_IN", "OWNS"}
@@ -331,6 +593,7 @@ def _stage(v2: BDV2AnalysisResult) -> tuple[str | None, str]:
 
 def _canonical_v3_relationship_map(v2: BDV2AnalysisResult) -> V3RelationshipMap:
     _ensure_canonical_relationship_map(v2)
+    _normalize_canonical_relationship_map(v2)
     pattern, pattern_name, _, evidence = _classify_structure(v2)
     relmap = v2.relationship_map
     entities = {entity.entity_id: entity for entity in relmap.entities}
@@ -347,6 +610,16 @@ def _canonical_v3_relationship_map(v2: BDV2AnalysisResult) -> V3RelationshipMap:
         for entity_id in (relation.from_entity_id, relation.to_entity_id)
         if entity_id in entities and entities[entity_id].status in visible_statuses
     }
+    visible_project_entity_ids = {
+        item.entity_id for item in relmap.participations
+        if item.entity_id in entities
+        and item.temporal_scope == "current"
+        and any(item.role_statuses.get(role, "unknown") in visible_statuses for role in item.roles)
+    }
+    # One organization should appear once. If a corporate entity also has a
+    # current project role, its project node carries both that role and the
+    # corporate hierarchy edge.
+    corporate_entity_ids -= visible_project_entity_ids
 
     def readable(value: str) -> str:
         special = {"PM_CM": "PM / CM", "EPC": "EPC", "MEP_CONTRACTOR": "MEP Contractor"}
@@ -357,6 +630,31 @@ def _canonical_v3_relationship_map(v2: BDV2AnalysisResult) -> V3RelationshipMap:
             if status in statuses:
                 return status
         return "unknown"
+
+    def relationship_label(relation: CanonicalRelationship) -> str:
+        text = f"{relation.relationship_basis} {relation.description}".casefold()
+        if relation.relationship_type == "AWARDS_CONTRACT_TO":
+            if any(token in text for token in ("m&e", "mep", "mechanical & electrical", "mechanical and electrical", "fit-out", "fit out")):
+                return "M&E / Fit-out 계약"
+            return "공사·용역 계약"
+        if relation.relationship_type == "CO_DEVELOPMENT" and "mou" in text:
+            return "공동 개발 · MOU"
+        labels = {
+            "SUBSIDIARY_OF": "현지 자회사",
+            "PARENT_OF": "모회사",
+            "LOCAL_ARM_OF": "현지 법인",
+            "EPC_CONTRACT": "EPC 계약",
+            "DESIGN_CONTRACT": "설계 계약",
+            "SUPPLY_CONTRACT": "공급 계약",
+            "MOU": "MOU",
+            "CO_DEVELOPMENT": "공동 개발",
+            "INVESTS_IN": "투자",
+            "OWNS": "소유",
+            "HOSTS": "사업 부지 제공",
+            "REGULATES": "인허가·감독",
+            "APPROVES": "승인",
+        }
+        return labels.get(relation.relationship_type, readable(relation.relationship_type))
 
     nodes: list[V3StructureNode] = []
     corporate_node_ids: dict[str, str] = {}
@@ -395,6 +693,14 @@ def _canonical_v3_relationship_map(v2: BDV2AnalysisResult) -> V3RelationshipMap:
         and item.temporal_scope == "current"
         and item.roles
         and any(item.role_statuses.get(role, "unknown") in visible_statuses for role in item.roles)
+        and not (
+            set(item.roles) == {"OTHER"}
+            and (
+                entities[item.entity_id].organization_scope == "project_company"
+                or "listed company" in entities[item.entity_id].canonical_name.casefold()
+                or "ticker" in entities[item.entity_id].canonical_name.casefold()
+            )
+        )
     ]
     project_start_layer = 1 + (max((node.layer for node in nodes), default=0) if nodes else 0)
     role_order = {
@@ -438,16 +744,14 @@ def _canonical_v3_relationship_map(v2: BDV2AnalysisResult) -> V3RelationshipMap:
         if relation.status not in visible_statuses:
             continue
         if relation.relationship_type in CORPORATE_RELATIONSHIPS:
-            from_node = corporate_node_ids.get(relation.from_entity_id)
-            to_node = corporate_node_ids.get(relation.to_entity_id)
+            from_node = corporate_node_ids.get(relation.from_entity_id) or project_node_ids.get(relation.from_entity_id)
+            to_node = corporate_node_ids.get(relation.to_entity_id) or project_node_ids.get(relation.to_entity_id)
         else:
             from_node = project_node_ids.get(relation.from_entity_id)
             to_node = project_node_ids.get(relation.to_entity_id)
         if not from_node or not to_node or from_node == to_node:
             continue
-        label = readable(relation.relationship_type)
-        if relation.relationship_basis:
-            label = f"{label} · {relation.relationship_basis}"
+        label = relationship_label(relation)
         relations.append(V3StructureRelation(
             from_node=from_node,
             to_node=to_node,
@@ -477,13 +781,93 @@ def _canonical_v3_relationship_map(v2: BDV2AnalysisResult) -> V3RelationshipMap:
 
 def build_v3_result(v2: BDV2AnalysisResult, seed: str, extracted: str = "") -> BDV3AnalysisResult:
     _ensure_canonical_relationship_map(v2)
+    _normalize_canonical_relationship_map(v2)
     result = _build_v3_result_legacy(v2, seed, extracted)
     result.relationship_map = _canonical_v3_relationship_map(v2)
+    _reconcile_owner_target(result)
+    _reconcile_stage_questions(result)
     result.stakeholder_unknowns = list(dict.fromkeys([
         *result.stakeholder_unknowns,
         *v2.relationship_map.research_gaps,
     ]))[:12]
     return result
+
+
+def _reconcile_owner_target(result: BDV3AnalysisResult) -> None:
+    """Prefer the supported local project owner as the first external target."""
+
+    owner_nodes = [
+        node for node in result.relationship_map.nodes
+        if node.layer_type == "project"
+        and "PROJECT_OWNER" in node.roles
+        and node.status in {"confirmed", "likely"}
+        and node.company
+    ]
+    if not owner_nodes:
+        return
+    owner = min(
+        owner_nodes,
+        key=lambda node: (
+            node.organization_scope != "local_entity",
+            node.organization_scope == "global_hq",
+            node.company,
+        ),
+    )
+    result.v2_snapshot.project_intelligence.owner_summary = owner.company
+    strength = "strong" if owner.status == "confirmed" else "medium"
+    target = V3StakeholderTarget(
+        stakeholder_type="PROJECT_OWNER",
+        role="Project Owner · 현지 사업 주체" if owner.organization_scope == "local_entity" else "Project Owner",
+        company=owner.company,
+        target_function=["Investment / Project Management", "Local Procurement"],
+        priority=1,
+        evidence_strength=strength,
+        reason="현재 프로젝트의 직접 사업 주체로 확인되어 투자·발주 구조와 현지 의사결정 경로를 가장 먼저 확인할 대상입니다.",
+        evidence=owner.evidence[:8],
+    )
+    others = [item for item in result.priority_1 if item.stakeholder_type != "PROJECT_OWNER"]
+    result.priority_1 = [target, *others][:3]
+
+
+def _reconcile_stage_questions(result: BDV3AnalysisResult) -> None:
+    """Ask about remaining commercial openings once a scoped contractor is known."""
+
+    stage = result.project_stage.value
+    confirmed_roles = {
+        role for node in result.relationship_map.nodes
+        if node.status in {"confirmed", "likely"}
+        for role in node.roles
+    }
+    scoped_execution_partner = bool(confirmed_roles.intersection({"MEP_CONTRACTOR", "GENERAL_CONTRACTOR"}))
+    full_epc_confirmed = "EPC" in confirmed_roles
+    if stage not in {"건설 인허가", "시공"} or not scoped_execution_partner or full_epc_confirmed:
+        return
+    result.questions_to_ask = [
+        V3Question(
+            question="현재 M&E와 Fit-out 외에 아직 발주되지 않았거나 공급사가 정해지지 않은 설비는 무엇입니까?",
+            information_goal="지금 참여할 수 있는 공급 범위 확인",
+            reason="이미 계약된 공사 범위와 아직 참여 가능한 패키지를 구분합니다.",
+            converts="unknown",
+        ),
+        V3Question(
+            question="남은 설비의 사양과 공급사 선정은 프로젝트 오너와 계약사 중 어느 조직이 주도합니까?",
+            information_goal="실제 기술·구매 의사결정자 확인",
+            reason="남은 패키지의 실제 접촉 대상과 승인 경로를 정합니다.",
+            converts="unknown",
+        ),
+        V3Question(
+            question="생산 개시 전까지 예정된 주요 발주 일정과 공급사 등록 절차는 어떻게 됩니까?",
+            information_goal="참여 시점과 진입 절차 확인",
+            reason="제안 준비 시점과 공급사 등록에 필요한 조치를 정합니다.",
+            converts="unknown",
+        ),
+        V3Question(
+            question="초기 가동 이후 생산라인 증설이나 자동화·에너지·시설 운영 관련 추가 투자 계획이 있습니까?",
+            information_goal="현재 공사 이후의 신규 투자 기회 확인",
+            reason="현재 패키지가 닫혀 있어도 후속 증설과 운영 투자 기회를 찾습니다.",
+            converts="inference",
+        ),
+    ]
 
 
 def _build_v3_result_legacy(v2: BDV2AnalysisResult, seed: str, extracted: str = "") -> BDV3AnalysisResult:
@@ -715,7 +1099,7 @@ def _build_v3_result_legacy(v2: BDV2AnalysisResult, seed: str, extracted: str = 
     if structure_id is None: questions.append(V3Question(question="투자 주체와 EPC의 투자·지분 참여 관계는 어떻게 구성되어 있습니까?", information_goal="사업구도 확정", reason="EPC의 P1 여부를 결정합니다.", converts="unknown"))
     if not companies.get("DESIGN"): questions.append(V3Question(question="설계·Engineering 파트너가 선정되었으며 현재 Spec에 영향력을 행사하고 있습니까?", information_goal="설계 영향 주체 확인", reason="기술 사양 접점과 P2 타깃을 확정합니다.", converts="unknown"))
     if not companies.get("EPC"): questions.append(V3Question(question="EPC는 선정되었고 시공만 담당합니까, 투자 의사결정에도 참여합니까?", information_goal="EPC 역할 확인", reason="EPC의 접촉 Priority를 결정합니다.", converts="unknown"))
-    questions.extend([V3Question(question="현재 확정된 제품 Spec과 아직 열려 있는 Scope는 무엇입니까?", information_goal="Spec-in 가능 범위", reason="제안 가능한 제품과 납품 시점을 확정합니다.", converts="inference"), V3Question(question="Vendor shortlist와 최종 기술·구매 승인권자는 누구입니까?", information_goal="실제 의사결정권자", reason="접근 경로와 경쟁 구도를 확인합니다.", converts="unknown")])
+    questions.extend([V3Question(question="현재 확정된 제품 사양과 아직 결정되지 않은 공급 범위는 무엇입니까?", information_goal="사양 반영 가능 범위", reason="제안 가능한 제품과 납품 시점을 확정합니다.", converts="inference"), V3Question(question="공급사 후보 목록과 최종 기술·구매 승인권자는 누구입니까?", information_goal="실제 의사결정권자", reason="접근 경로와 경쟁 구도를 확인합니다.", converts="unknown")])
     status = v2.bd_decision.decision
     if status == "closed": targets, questions, products = [], [], []
     return BDV3AnalysisResult(opportunity_title=v2.opportunity_title, executive_summary=v2.executive_summary, status=status, status_reason=v2.bd_decision.rationale, building_type=V3ProjectFact(value=building.claim, status=_status(building.credibility), evidence=building.source_labels), project_stage=V3ProjectFact(value=v2.context.business_stage.claim, status=_status(v2.context.business_stage.credibility), evidence=v2.context.business_stage.source_labels), customer_needs=needs, relationship_map=relationship, priority_1=[x for x in targets if x.priority == 1], priority_2=[x for x in targets if x.priority == 2], priority_3=[x for x in targets if x.priority == 3], stakeholder_unknowns=unknowns, questions_to_ask=questions[:8], talking_points=[V3TalkingPoint(product=p.product, scenario=p.suggested_scenario, customer_need=p.customer_need, project_stage=stage_group) for p in products], customer_need_top_signals=needs[:3], product_top3=products, decision_trace_excel="중복 Match Count로 Excel 후보군과 기본 Priority를 결정했습니다.", decision_trace_ai="기사·입력 텍스트의 직접 맥락은 Excel 후보군 안에서만 동률과 우선순위를 보정했습니다.", evidence=v2.evidence, source_summary=v2.source_summary, limitations=v2.limitations, v2_snapshot=v2)

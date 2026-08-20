@@ -273,6 +273,124 @@ class EntityFirstRelationshipMapTest(unittest.TestCase):
         self.assertEqual(relation.relationship_basis, "MOU")
         self.assertEqual(relation.status, "confirmed")
 
+    def test_avc_style_aliases_and_scoped_contract_are_simplified(self) -> None:
+        v2 = demo_v2_result()
+        v2.context.business_structure = []
+        v2.context.business_stage.claim = "시공"
+        v2.relationship_map = RelationshipDecisionMap(
+            entities=[
+                EntityIdentity(entity_id="org:avc", canonical_name="Asia Vital Components Co., Ltd. (AVC)", organization_scope="global_hq", organization_type="PRIVATE_COMPANY", status="confirmed"),
+                EntityIdentity(entity_id="org:avc-tech-long", canonical_name="AVC Tech. (Vietnam) Co., Ltd. / AVC Technology (Vietnam) Company Limited", organization_scope="local_entity", organization_type="PRIVATE_COMPANY", status="confirmed"),
+                EntityIdentity(entity_id="org:avc-technology", canonical_name="AVC Technology (Vietnam) Company Limited", organization_scope="local_entity", organization_type="PRIVATE_COMPANY", status="confirmed"),
+                EntityIdentity(entity_id="org:unknown", canonical_name="創興國際建設有限公司", organization_type="CONSTRUCTION_COMPANY", status="confirmed"),
+                EntityIdentity(entity_id="org:gov-a", canonical_name="UBND / provincial authorities of Ninh Binh", organization_type="PUBLIC_INSTITUTION", status="confirmed"),
+                EntityIdentity(entity_id="org:gov-b", canonical_name="UBND / Ninh Binh provincial authorities", organization_type="PUBLIC_INSTITUTION", status="confirmed"),
+                EntityIdentity(entity_id="org:project", canonical_name="AVC Technology Vietnam – Kim Bang project / plant", organization_scope="project_company", organization_type="OTHER", status="confirmed"),
+                EntityIdentity(entity_id="org:ticker", canonical_name="奇鋐 (listed company; ticker referenced in disclosure)", organization_scope="regional_hq", organization_type="PRIVATE_COMPANY", status="confirmed"),
+            ],
+            participations=[
+                ProjectParticipation(project_id="project:avc", entity_id="org:avc", roles=["PROJECT_OWNER", "INVESTOR"], role_statuses={"PROJECT_OWNER": "confirmed", "INVESTOR": "confirmed"}, temporal_scope="current"),
+                ProjectParticipation(project_id="project:avc", entity_id="org:avc-tech-long", roles=["PROJECT_OWNER"], role_statuses={"PROJECT_OWNER": "confirmed"}, temporal_scope="current"),
+                ProjectParticipation(project_id="project:avc", entity_id="org:avc-technology", roles=["PROJECT_OWNER", "OTHER"], role_statuses={"PROJECT_OWNER": "confirmed", "OTHER": "confirmed"}, temporal_scope="current"),
+                ProjectParticipation(project_id="project:avc", entity_id="org:unknown", roles=["EPC", "GENERAL_CONTRACTOR"], role_statuses={"EPC": "confirmed", "GENERAL_CONTRACTOR": "confirmed"}, temporal_scope="current"),
+                ProjectParticipation(project_id="project:avc", entity_id="org:gov-a", roles=["GOVERNMENT_PARTNER", "REGULATORY_AUTHORITY"], role_statuses={"GOVERNMENT_PARTNER": "confirmed", "REGULATORY_AUTHORITY": "confirmed"}, temporal_scope="current"),
+                ProjectParticipation(project_id="project:avc", entity_id="org:gov-b", roles=["GOVERNMENT_PARTNER"], role_statuses={"GOVERNMENT_PARTNER": "confirmed"}, temporal_scope="current"),
+                ProjectParticipation(project_id="project:avc", entity_id="org:project", roles=["OTHER"], role_statuses={"OTHER": "confirmed"}, temporal_scope="current"),
+                ProjectParticipation(project_id="project:avc", entity_id="org:ticker", roles=["OTHER"], role_statuses={"OTHER": "confirmed"}, temporal_scope="current"),
+            ],
+            canonical_relationships=[
+                CanonicalRelationship(from_entity_id="org:avc", to_entity_id="org:avc-technology", relationship_type="SUBSIDIARY_OF", status="confirmed", temporal_scope="current"),
+                CanonicalRelationship(from_entity_id="org:avc-tech-long", to_entity_id="org:unknown", relationship_type="AWARDS_CONTRACT_TO", description="Mechanical & electrical and fit-out works contract", status="confirmed", temporal_scope="current"),
+            ],
+            research_gaps=["Investor company not confirmed", "Design / Engineering — Not confirmed"],
+        )
+
+        result = build_v3_result(v2, "AVC Kim Bang plant")
+        nodes = result.relationship_map.nodes
+
+        self.assertEqual(sum("AVC Technology (Vietnam)" in node.company for node in nodes), 1)
+        self.assertEqual(sum("Ninh Binh provincial authorities" in node.company for node in nodes), 1)
+        self.assertFalse(any("listed company" in node.company for node in nodes))
+        self.assertFalse(any("Kim Bang project" in node.company for node in nodes))
+        contractor = next(node for node in nodes if node.company == "創興國際建設有限公司")
+        self.assertEqual(contractor.roles, ["MEP_CONTRACTOR"])
+        self.assertNotIn("Investor company not confirmed", result.relationship_map.research_gaps)
+        self.assertEqual(result.priority_1[0].company, "AVC Technology (Vietnam) Company Limited")
+        subsidiary = next(item for item in result.relationship_map.relations if item.relation_type == "SUBSIDIARY_OF")
+        self.assertIn("avc-technology", subsidiary.from_node)
+        self.assertIn("org:avc", subsidiary.to_node)
+        contract = next(item for item in result.relationship_map.relations if item.relation_type == "AWARDS_CONTRACT_TO")
+        self.assertEqual(contract.label, "M&E / Fit-out 계약")
+        self.assertNotIn("disclosure", contract.label.casefold())
+        self.assertEqual(len(result.questions_to_ask), 4)
+        self.assertIn("M&E와 Fit-out 외에", result.questions_to_ask[0].question)
+        self.assertIn("발주 일정과 공급사 등록", result.questions_to_ask[2].question)
+        self.assertIn("추가 투자 계획", result.questions_to_ask[3].question)
+        self.assertFalse(any("투자 의사결정에도 참여" in item.question for item in result.questions_to_ask))
+
+    def test_ecosystem_mentions_do_not_clutter_current_project_map(self) -> None:
+        v2 = demo_v2_result()
+        v2.context.business_structure = []
+        v2.relationship_map = nic_thermo_v2_map()
+        nic_id = next(entity.entity_id for entity in v2.relationship_map.entities if "Innovation" in entity.canonical_name)
+        thermo_id = next(entity.entity_id for entity in v2.relationship_map.entities if "Thermo" in entity.canonical_name)
+        additions = [
+            ("org:fpt", "FPT Corporation", ["END_CLIENT", "STRATEGIC_PARTNER"], ["Named participant / collaborator; intended user at forum"]),
+            ("org:distributor", "Vietnam Lab Distributor", ["EQUIPMENT_SUPPLIER", "VENDOR"], ["Authorized distributor channel for product groups"]),
+            ("org:official", "Deputy Prime Minister Example Person", ["GOVERNMENT_PARTNER", "REGULATORY_AUTHORITY"], ["Meeting with delegation"]),
+        ]
+        for entity_id, name, roles, evidence in additions:
+            v2.relationship_map.entities.append(EntityIdentity(
+                entity_id=entity_id,
+                canonical_name=name,
+                organization_type="PRIVATE_COMPANY",
+                organization_scope="local_entity",
+                status="confirmed",
+                evidence_labels=evidence,
+            ))
+            v2.relationship_map.participations.append(ProjectParticipation(
+                project_id=v2.relationship_map.project_id,
+                entity_id=entity_id,
+                roles=roles,
+                role_statuses={role: "confirmed" for role in roles},
+                temporal_scope="current",
+                evidence_labels=evidence,
+            ))
+        v2.relationship_map.canonical_relationships.extend([
+            CanonicalRelationship(
+                from_entity_id=nic_id,
+                to_entity_id="org:fpt",
+                relationship_type="STRATEGIC_PARTNERSHIP",
+                relationship_basis="Named as intended partners / users at the forum",
+                status="confirmed",
+                temporal_scope="current",
+            ),
+            CanonicalRelationship(
+                from_entity_id=thermo_id,
+                to_entity_id="org:official",
+                relationship_type="INVESTS_IN",
+                relationship_basis="Government meeting with company delegation",
+                description="Political engagement and facilitation intent",
+                status="confirmed",
+                temporal_scope="current",
+            ),
+        ])
+
+        result = build_v3_result(v2, "NIC Thermo Fisher shared laboratory MOU")
+        companies = {node.company for node in result.relationship_map.nodes}
+
+        self.assertIn("National Innovation Centre (NIC)", companies)
+        self.assertIn("Thermo Fisher Scientific", companies)
+        self.assertNotIn("FPT Corporation", companies)
+        self.assertNotIn("Vietnam Lab Distributor", companies)
+        self.assertNotIn("Deputy Prime Minister Example Person", companies)
+        self.assertEqual([edge.relation_type for edge in result.relationship_map.relations], ["CO_DEVELOPMENT"])
+        candidate_ids = {
+            item.entity_id for item in result.v2_snapshot.relationship_map.participations
+            if item.temporal_scope == "candidate"
+        }
+        self.assertTrue({"org:fpt", "org:distributor", "org:official"}.issubset(candidate_ids))
+
 
 if __name__ == "__main__":
     unittest.main()

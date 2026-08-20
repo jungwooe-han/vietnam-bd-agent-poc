@@ -10,6 +10,8 @@ from src.vietnam_bd.localization_v3 import ui
 from src.vietnam_bd.ui_components_v3 import (
     STAGE_LABELS,
     _compact_fact_value,
+    _confirmed_project_owner_node,
+    _contact_strategy_summary,
     _display_value,
     _evidence_label,
     _location_map_rows,
@@ -101,6 +103,26 @@ class OpportunityUIHelpersTest(unittest.TestCase):
         self.assertEqual(ui("ko", "opportunity_tab"), "기회 개요")
         self.assertEqual(ui("ko", "strategy_tab"), "접촉 전략")
         self.assertEqual(ui("ko", "meeting_tab"), "미팅 준비")
+
+    def test_contact_strategy_summary_uses_natural_sales_language(self) -> None:
+        result = build_v3_result(demo_v2_result(), "demo")
+
+        summary = _contact_strategy_summary(result)
+
+        self.assertIn("이야기해 보세요", summary)
+        self.assertIn("발주 일정", summary)
+        self.assertIn("제안이 참여할 수 있는 지점", summary)
+        self.assertNotIn("열려 있는 범위", summary)
+        self.assertNotIn("권한", summary)
+
+    def test_overview_owner_prefers_confirmed_relationship_map_owner(self) -> None:
+        result = build_v3_result(demo_v2_result(), "demo")
+        result.v2_snapshot.project_intelligence.owner_summary = "Wrong summary company"
+        owner = _confirmed_project_owner_node(result)
+
+        self.assertIsNotNone(owner)
+        self.assertNotEqual(owner.company, "Wrong summary company")
+        self.assertIn("PROJECT_OWNER", owner.roles)
 
     def test_legacy_provenance_links_urls_to_matching_publishers(self) -> None:
         rules, rows = _source_rows(
@@ -296,6 +318,30 @@ render_page_1_opportunity_v3(build_v3_result(v2, "NIC Thermo Fisher MOU"))
         self.assertTrue(any("아직 확인되지 않은 역할" in item.value for item in app.markdown))
         self.assertFalse(any("Research Gaps" in item.value for item in app.markdown))
         self.assertFalse(any("Not identified" in item.value and "<svg" in item.value for item in app.markdown))
+
+    def test_strategy_page_renders_internal_owner_and_five_plus_ten_osp_cases(self) -> None:
+        source = '''
+from src.vietnam_bd.demo_data_v2 import demo_v2_result
+from src.vietnam_bd.ui_components_v3 import render_page_2_strategy_v3
+from src.vietnam_bd.v3_rule_engine import build_v3_result
+
+result = build_v3_result(demo_v2_result(), "Vietnam electronics factory expansion")
+render_page_2_strategy_v3(result)
+'''
+
+        app = AppTest.from_string(source).run(timeout=30)
+        markdown = "\n".join(item.value for item in app.markdown)
+
+        self.assertFalse(app.exception)
+        self.assertIn("과거 유사 OSP", markdown)
+        self.assertIn("내부 담당자", markdown)
+        self.assertIn("사업단계와 고객 과제는 유사도 판단에 사용하지 않습니다", markdown)
+        self.assertEqual(markdown.count("<div class='v3-osp-card'>"), 15)
+        self.assertIn("data-tooltip=", markdown)
+        self.assertIn("제품 조합", markdown)
+        self.assertIn("종료일", markdown)
+        self.assertNotIn("v3-osp-reasons", markdown)
+        self.assertTrue(any("유사 사례 더보기 · 10개" in item.label for item in app.expander))
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import streamlit as st
 from .models import ProjectLocation
 from .models_v3 import BDV3AnalysisResult, V3StakeholderTarget
 from .localization_v3 import ui
+from .osp_matching import OSPMatch, match_osp_cases
 
 
 def inject_v3_css() -> None:
@@ -83,12 +84,13 @@ def inject_v3_css() -> None:
         .v3-stage-shell{margin:18px 0 22px;padding:18px 20px 16px;border:1px solid #d8d8d8;border-left:4px solid #000;background:#fafafa}.v3-stage-head{align-items:flex-start;gap:20px;margin-bottom:10px}.v3-stage-copy{min-width:0}.v3-stage-label{color:#666;font-size:12px;line-height:1.35;font-weight:600;margin-bottom:3px}.v3-stage-current{display:flex;align-items:center;gap:8px;font-size:24px;line-height:1.25;font-weight:700;letter-spacing:-.025em}.v3-stage-current strong{font-weight:700}.v3-stage-note{margin-top:5px;color:#555;font-size:13px;line-height:1.5}.v3-stage-gate{flex:0 0 auto;max-width:260px;padding:6px 10px;border:1px solid #cfcfcf;background:#fff;color:#222;font-size:11px;line-height:1.35;font-weight:700}.v3-stage-progress{margin:12px 0 7px;color:#555;font-size:12px;line-height:1.4;font-weight:600}.v3-stage-bands{gap:3px;margin-bottom:5px}.v3-stage-band{padding:5px 6px;font-size:10px;line-height:1.35;letter-spacing:0}.v3-stage-track{gap:3px}.v3-stage-item{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;min-height:56px;padding:10px 5px 6px;border-top-width:3px;background:#fff;color:#666;font-size:11px;line-height:1.3;font-weight:500}.v3-stage-item.passed{border-color:#777;background:#f3f3f3;color:#444}.v3-stage-item.active{border-color:#000;background:#111;color:#fff;font-weight:700}.v3-stage-item.active:before{width:10px;height:10px;background:#111;border:2px solid #fff;box-shadow:0 0 0 1px #111}.v3-stage-state{font-size:10px;line-height:1.2;font-weight:700;color:#666}.v3-stage-item.active .v3-stage-state{color:#fff}.v3-stage-item.upcoming .v3-stage-state{color:#315b92}.v3-stage-unknown{font-size:12px;line-height:1.5}
         .v3-decision{grid-template-columns:120px minmax(0,1fr) minmax(190px,.42fr);gap:18px;padding:15px 0 16px 16px;margin-bottom:18px}.v3-decision-label{font-size:11px;line-height:1.4;letter-spacing:.04em;text-transform:none;margin-bottom:5px}.v3-decision-status{font-size:22px;line-height:1.35}.v3-decision-guide{font-size:14px;line-height:1.65}.v3-decision-facts li{font-size:12px;line-height:1.5}.v3-decision-copy{font-size:13px;line-height:1.6}
         .v3-map-shell{padding:16px 20px 9px}.v3-map-summary{gap:16px;padding:8px 0 11px;font-size:12px;line-height:1.5}.v3-map-legend{font-size:12px;line-height:1.4}.v3-map-next{margin-left:auto}
+        .v3-internal-tag{display:inline-flex;margin-bottom:7px;padding:4px 7px;border:1px solid #9fb6d4;background:#f4f8fc;color:#244e82;font-size:10px;line-height:1.3;font-weight:700;letter-spacing:.03em}.v3-osp-intro{max-width:780px;margin:-2px 0 15px;color:#555;font-size:13px;line-height:1.55}.v3-osp-table{width:100%;overflow-x:auto;border-top:2px solid #000}.v3-osp-table-head,.v3-osp-card{display:grid;grid-template-columns:minmax(260px,1.7fr) 100px 72px 92px 100px minmax(185px,1.25fr) 92px 92px;gap:14px;align-items:center;min-width:1100px}.v3-osp-table-head{padding:9px 6px;color:#777;background:#fafafa;border-bottom:1px solid #ddd;font-size:10px;line-height:1.35;font-weight:700}.v3-osp-card{padding:14px 6px;border-bottom:1px solid #e3e3e3;color:#222;font-size:11px;line-height:1.45}.v3-osp-card:hover{background:#fafafa}.v3-osp-rank{color:#707070;font-size:9px;line-height:1.35;font-weight:700;letter-spacing:.05em}.v3-osp-id{display:inline-block;margin-left:6px;color:#555;font-weight:600;letter-spacing:0}.v3-osp-name{position:relative;width:max-content;max-width:100%;margin-top:4px;color:#000;font-size:14px;line-height:1.4;font-weight:700;text-decoration:underline dotted #999;text-underline-offset:3px;cursor:help}.v3-osp-name:focus{outline:1px solid #555;outline-offset:2px}.v3-osp-name:hover:after,.v3-osp-name:focus:after{content:attr(data-tooltip);position:absolute;z-index:40;left:0;top:calc(100% + 7px);width:310px;padding:11px 13px;background:#111;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18);white-space:pre-line;font-size:11px;line-height:1.55;font-weight:500}.v3-osp-result{display:inline-flex;width:max-content;padding:2px 6px;border:1px solid #ccc;font-size:10px;font-weight:700}.v3-osp-result.won{border-color:#9ec8b2;color:#176b45;background:#f6fbf8}.v3-osp-result.lost{color:#666;background:#fafafa}.v3-osp-owner{font-weight:700;color:#244e82}.v3-osp-products{color:#444;overflow-wrap:anywhere}
         .bd-entry-hero{padding:6vh 20px 26px}.bd-entry-eyebrow{font-size:11px;line-height:1.4;letter-spacing:.08em}.bd-entry-hero h1{font-size:clamp(40px,3.8vw,48px);line-height:1.12;margin:13px 0 14px;padding:0!important}.bd-entry-hero p{font-size:15px;line-height:1.6}.st-key-bd_entry_composer [data-testid="stPopover"] button{font-size:13px}.st-key-bd_entry_composer .stButton>button{font-size:14px}.bd-entry-outcomes{text-align:center;margin:16px auto 0;color:#555;font-size:12px;line-height:1.5}.bd-entry-privacy{text-align:center;margin:7px auto;color:#6f6f6f;font-size:12px;line-height:1.45}
         .bd-context-head p{font-size:12px}.bd-context-label{font-size:12px}.bd-context-question h3{font-size:14px}.bd-context-question p{font-size:12px}.st-key-bd_project_context [data-testid="stTextArea"] textarea{font-size:13px}.st-key-bd_project_context .stButton>button{font-size:14px}
         @media(prefers-reduced-motion:reduce){.st-key-bd_project_context{animation:none}}
         @media(max-width:900px){.v3-overview-grid{grid-template-columns:1fr}.v3-players{border-left:0;border-top:1px solid #ddd;padding:15px 0 0}.v3-context-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v3-context:nth-child(2){border-right:0}.v3-decision{grid-template-columns:92px 1fr}.v3-decision-trigger{grid-column:2}}
         @media(max-width:760px){.v3-head{flex-direction:column;margin:22px 0 18px}.v3-head h1{font-size:25px}.v3-gate{grid-template-columns:1fr}.v3-meta{grid-template-columns:1fr}.block-container{padding-left:1rem!important;padding-right:1rem!important}.v3-overview{padding-top:14px}.v3-project-name{font-size:21px}.v3-overview-facts{grid-template-columns:1fr}.st-key-v3_site_location{margin-top:10px}.v3-timeline{grid-template-columns:1fr;border-top:0;border-left:1px solid #ddd;margin-left:3px}.v3-milestone{padding:0 0 13px 15px}.v3-milestone:before{top:5px;left:-3px}.v3-player{grid-template-columns:65px 1fr}.v3-player-state{grid-column:2}.v3-decision{grid-template-columns:1fr;gap:8px;padding-left:12px}.v3-decision-trigger{grid-column:1}.v3-context-grid{grid-template-columns:1fr}.v3-context,.v3-context:nth-child(2){border-right:0;border-bottom:1px solid #eee;margin-right:0;padding-right:0}.bd-entry-hero{padding:6vh 4px 26px}.bd-entry-hero h1{font-size:38px}.bd-entry-hero p{font-size:15px}.st-key-bd_entry_composer{padding:10px 12px 12px;border-radius:20px}.st-key-bd_entry_composer [data-testid="stHorizontalBlock"]{flex-wrap:wrap}.st-key-bd_entry_composer [data-testid="column"]{min-width:100%!important;width:100%!important}.st-key-bd_entry_composer [data-testid="stPopover"] button,.st-key-bd_entry_composer .stButton>button{width:100%}.st-key-bd_project_context{padding:22px 18px 18px;border-radius:20px}.bd-context-head{display:block;margin-bottom:18px}.bd-context-head h2{font-size:21px}.bd-context-head p{text-align:left;margin-top:7px}.st-key-bd_building_choices [data-testid="stButtonGroup"],.st-key-bd_stage_choices [data-testid="stButtonGroup"]{flex-wrap:wrap!important;gap:5px!important}.st-key-bd_building_choices [data-testid="stButtonGroup"] button,.st-key-bd_stage_choices [data-testid="stButtonGroup"] button{min-height:36px!important;padding:6px 11px!important;font-size:12px!important}.st-key-bd_project_context>.stVerticalBlock>div:last-child [data-testid="stHorizontalBlock"]{flex-wrap:nowrap}.bd-entry-outcomes{line-height:1.7;padding:0 24px}}
-        @media(max-width:760px){.v3-popover{position:fixed;z-index:999;top:16%;left:16px;right:16px;width:auto;max-height:68vh;overflow:auto}.v3-stage-shell{padding:16px 14px}.v3-stage-head{display:block}.v3-stage-gate{display:inline-block;max-width:none;margin-top:10px}.v3-stage-bands{display:none}.v3-stage-track{grid-template-columns:1fr}.v3-stage-item{min-height:0;flex-direction:row;justify-content:space-between;padding:9px 10px 9px 17px;border-top:0;border-left:3px solid #ddd;text-align:left}.v3-stage-item.active{border-left-color:#000}.v3-stage-item.active:before{top:50%;left:-6px;transform:translateY(-50%)}.v3-decision-facts li{font-size:12px}.v3-map-next{width:100%;margin-left:0}}
+        @media(max-width:760px){.v3-popover{position:fixed;z-index:999;top:16%;left:16px;right:16px;width:auto;max-height:68vh;overflow:auto}.v3-stage-shell{padding:16px 14px}.v3-stage-head{display:block}.v3-stage-gate{display:inline-block;max-width:none;margin-top:10px}.v3-stage-bands{display:none}.v3-stage-track{grid-template-columns:1fr}.v3-stage-item{min-height:0;flex-direction:row;justify-content:space-between;padding:9px 10px 9px 17px;border-top:0;border-left:3px solid #ddd;text-align:left}.v3-stage-item.active{border-left-color:#000}.v3-stage-item.active:before{top:50%;left:-6px;transform:translateY(-50%)}.v3-decision-facts li{font-size:12px}.v3-map-next{width:100%;margin-left:0}.v3-osp-name:hover:after,.v3-osp-name:focus:after{position:fixed;left:16px;right:16px;top:22%;width:auto}}
         </style>
         """,
         unsafe_allow_html=True,
@@ -225,6 +227,25 @@ def _actor_for(result: BDV3AnalysisResult, aliases: tuple[str, ...]) -> object |
             if any(alias in f"{actor.role} {actor.organization}".lower() for alias in aliases)
         ),
         None,
+    )
+
+
+def _confirmed_project_owner_node(result: BDV3AnalysisResult) -> object | None:
+    owners = [
+        node for node in result.relationship_map.nodes
+        if "PROJECT_OWNER" in getattr(node, "roles", [])
+        and node.status in {"confirmed", "likely"}
+        and node.company
+    ]
+    if not owners:
+        return None
+    return min(
+        owners,
+        key=lambda node: (
+            node.organization_scope != "local_entity",
+            node.status != "confirmed",
+            node.company,
+        ),
     )
 
 
@@ -562,12 +583,14 @@ def _project_overview(result: BDV3AnalysisResult) -> None:
     current_facts = intelligence.current_project_facts
     investment = _matching_fact(current_facts, ("total investment", "capital", "capex", "usd", "vnd", "trillion", "million"))
     scale = _matching_fact(current_facts, ("capacity", "capa", "area", "hectare", "sqm", "m2", "규모", "면적", "생산량"))
-    owner = _actor_for(result, ("owner", "developer"))
+    owner_node = _confirmed_project_owner_node(result)
+    owner = _node_actor(result, owner_node) if owner_node else _actor_for(result, ("owner", "developer"))
+    owner_name = owner_node.company if owner_node else intelligence.owner_summary or getattr(owner, "organization", None)
     building = result.v2_snapshot.context.building_type
     facts_html = "".join(
         [
             _kv("프로젝트 유형", result.building_type.value, building),
-            _kv("사업주 / 개발사", intelligence.owner_summary or getattr(owner, "organization", None), owner),
+            _kv("사업주 / 개발사", owner_name, owner),
             _kv("투자 규모", _compact_fact_value(investment, "investment"), investment, hypothesis=_hypothesis_for(result, ("investment", "capital", "capex"))),
             _kv("시설 / 생산 규모", _compact_fact_value(scale, "scale"), scale, hypothesis=_hypothesis_for(result, ("capacity", "area", "hectare", "규모"))),
         ]
@@ -948,6 +971,7 @@ def _relationship_map(result: BDV3AnalysisResult, language: str) -> None:
     st.markdown("<div class='v3-map-shell'>" + legend + "".join(svg) + "</div>", unsafe_allow_html=True)
     st.caption(f"사업 구조: {relmap.structure_name} · 근거 수준: {_evidence_label(relmap.status)}")
     with st.expander(ui(language, "relationship_evidence")):
+        node_names = {node.node_id: _display_label(node.company) for node in relmap.nodes}
         for node in relmap.nodes:
             actor = _node_actor(result, node)
             company = _display_label(node.company)
@@ -960,7 +984,9 @@ def _relationship_map(result: BDV3AnalysisResult, language: str) -> None:
                     label = labels[index] if index < len(labels) else f"출처 {index + 1}"
                     st.markdown(f"  - [{label}]({url})")
         for edge in relmap.relations:
-            st.markdown(f"- `{edge.from_node} → {edge.to_node}` · {edge.label} · {_evidence_label(edge.status)}")
+            from_name = node_names.get(edge.from_node, edge.from_node)
+            to_name = node_names.get(edge.to_node, edge.to_node)
+            st.markdown(f"- **{from_name} → {to_name}** · {edge.label} · {_evidence_label(edge.status)}")
 
 
 def render_page_1_opportunity_v3(result: BDV3AnalysisResult, language: str = "ko") -> None:
@@ -1003,13 +1029,90 @@ def render_page_1_opportunity_v3(result: BDV3AnalysisResult, language: str = "ko
     _relationship_map(result, language)
 
 
-def _target_card(target: V3StakeholderTarget, language: str) -> None:
+def _target_card(target: V3StakeholderTarget, language: str, *, internal: bool = False) -> None:
     functions = " / ".join(target.target_function) or "미확인"
-    st.markdown(f"<div class='v3-card'><div class='v3-role'>{_safe(target.role)}</div><div class='v3-company'>{_safe(_display_label(target.company))}</div><div class='v3-meta'><b>{ui(language, 'target_function')}</b><span>{_safe(functions)}</span><b>{ui(language, 'person')}</b><span>{_safe(_display_label(target.person))}</span><b>{ui(language, 'evidence')}</b><span>{_badge(target.evidence_strength, language)}</span></div></div>", unsafe_allow_html=True)
+    internal_tag = "<div class='v3-internal-tag'>내부 담당자</div>" if internal else ""
+    st.markdown(f"<div class='v3-card'>{internal_tag}<div class='v3-role'>{_safe(target.role)}</div><div class='v3-company'>{_safe(_display_label(target.company))}</div><div class='v3-meta'><b>{ui(language, 'target_function')}</b><span>{_safe(functions)}</span><b>{ui(language, 'person')}</b><span>{_safe(_display_label(target.person))}</span><b>{ui(language, 'evidence')}</b><span>{_badge(target.evidence_strength, language)}</span></div></div>", unsafe_allow_html=True)
     with st.expander(ui(language, "why_priority")):
         st.write(target.reason)
         if target.evidence:
             st.caption("근거: " + " / ".join(target.evidence))
+
+
+def _internal_osp_owner(match: OSPMatch | None) -> V3StakeholderTarget | None:
+    if match is None or not match.record.owner:
+        return None
+    record = match.record
+    return V3StakeholderTarget(
+        stakeholder_type="INTERNAL_OSP_OWNER",
+        role="유사 OSP 영업 담당자",
+        company=f"OSP {record.osp}",
+        target_function=["과거 제안·수주 맥락 확인", "내부 연결 지원"],
+        person=record.owner,
+        priority=2,
+        evidence_strength="strong",
+        reason=f"가장 유사한 과거 사례인 ‘{record.opportunity}’의 담당자입니다. 당시 접근 경로와 제안 범위, 수주 결과를 먼저 확인할 수 있습니다.",
+        evidence=[*match.reasons, f"OSP 결과: {record.status}"],
+    )
+
+
+def _osp_card_html(match: OSPMatch, rank: int) -> str:
+    record = match.record
+    amount = f"${record.amount_usd:,.0f}" if record.amount_usd else "미확인"
+    created = record.created_at.isoformat() if record.created_at else "미확인"
+    ended = record.end_date.isoformat() if record.end_date else "미확인"
+    won = record.status.casefold() == "closed won"
+    result_label = "수주" if won else "미수주" if record.status.casefold() == "closed lost" else _display_label(record.status)
+    result_class = "won" if won else "lost"
+    reasons = "&#10;".join(f"• {_safe(reason)}" for reason in match.reasons)
+    products = record.products or "미확인"
+    return (
+        f"<div class='v3-osp-card'>"
+        f"<div><div class='v3-osp-rank'>유사 사례 {rank}<span class='v3-osp-id'>{_safe(record.osp)}</span></div><div class='v3-osp-name' tabindex='0' data-tooltip='{reasons}'>{_safe(record.opportunity)}</div></div>"
+        f"<span class='v3-osp-owner'>{_safe(record.owner)}</span>"
+        f"<span class='v3-osp-result {result_class}'>{_safe(result_label)}</span>"
+        f"<span>{amount}</span><span>{_safe(record.region)}</span>"
+        f"<span class='v3-osp-products'>{_safe(products)}</span>"
+        f"<span>{created}</span><span>{ended}</span></div>"
+    )
+
+
+def _osp_table(matches: list[OSPMatch], start_rank: int) -> None:
+    header = (
+        "<div class='v3-osp-table-head'><span>OSP / Opportunity</span><span>담당자</span><span>결과</span>"
+        "<span>금액</span><span>지역</span><span>제품 조합</span><span>생성일</span><span>종료일</span></div>"
+    )
+    rows = "".join(_osp_card_html(match, start_rank + index) for index, match in enumerate(matches))
+    st.markdown(f"<div class='v3-osp-table'>{header}{rows}</div>", unsafe_allow_html=True)
+
+
+def _render_osp_matches(matches: list[OSPMatch]) -> None:
+    _section("과거 유사 OSP", "내부 레퍼런스")
+    st.markdown(
+        "<div class='v3-osp-intro'>과거에 어떤 유사 프로젝트가 있었고, 내부에서 누구에게 먼저 물어볼 수 있는지 확인하세요. 사업단계와 고객 과제는 유사도 판단에 사용하지 않습니다.</div>",
+        unsafe_allow_html=True,
+    )
+    if not matches:
+        st.info("OSP Data에서 비교할 수 있는 과거 사례를 찾지 못했습니다.")
+        return
+    _osp_table(matches[:5], 1)
+    remaining = matches[5:15]
+    if remaining:
+        with st.expander(f"유사 사례 더보기 · {len(remaining)}개"):
+            _osp_table(remaining, 6)
+
+
+def _contact_strategy_summary(result: BDV3AnalysisResult) -> str:
+    if not result.priority_1:
+        return "먼저 프로젝트를 주도하는 조직을 확인하세요. 담당 조직을 찾으면 현재 협력사와 향후 발주 일정을 물어보고, 제안에 참여할 수 있는 지점을 판단할 수 있습니다."
+    target = result.priority_1[0]
+    company = _display_label(target.company)
+    role = _display_label(target.role).replace(" · 현지 사업 주체", "")
+    subject = f"{company}의 {role} 담당 조직" if company != "Not identified" else f"{role} 담당 조직"
+    return (
+        f"우선 {subject}과 이야기해 보세요. 현재 협의 중인 업체와 검토 중인 사양, "
+        "앞으로의 발주 일정을 확인하면 우리 제안이 참여할 수 있는 지점을 판단할 수 있습니다."
+    )
 
 
 def render_page_2_strategy_v3(result: BDV3AnalysisResult, language: str = "ko") -> None:
@@ -1018,19 +1121,27 @@ def render_page_2_strategy_v3(result: BDV3AnalysisResult, language: str = "ko") 
     if result.status == "closed":
         st.error("현재 기회는 종료 단계입니다. 운영·리트로핏·후속 확장 관계자만 별도로 검토하세요.")
         return
-    roles = ", ".join(item.role for item in result.priority_1) or "확인된 1순위 접촉 대상 없음"
-    summary = "권한, 아직 열려 있는 범위, 다음 사양 결정 시점을 확인한 뒤 제안을 준비하세요."
+    osp_matches = match_osp_cases(result, limit=15)
+    internal_owner = _internal_osp_owner(osp_matches[0] if osp_matches else None)
+    priority_2 = list(result.priority_2)
+    if internal_owner and not any(
+        target.person and target.person.casefold() == internal_owner.person.casefold()
+        for target in priority_2
+    ):
+        priority_2.append(internal_owner)
+    summary = _contact_strategy_summary(result)
     strategy_label = "접촉 전략 요약"
-    st.markdown(f"<div class='v3-ai'><div class='v3-ai-title'>{strategy_label}</div><div class='v3-ai-copy'>{ui(language, 'meet_first')}: <b>{_safe(roles)}</b>. {summary}</div></div>", unsafe_allow_html=True)
-    for priority, targets in ((1, result.priority_1), (2, result.priority_2)):
+    st.markdown(f"<div class='v3-ai'><div class='v3-ai-title'>{strategy_label}</div><div class='v3-ai-copy'>{_safe(summary)}</div></div>", unsafe_allow_html=True)
+    for priority, targets in ((1, result.priority_1), (2, priority_2)):
         st.markdown(f"<div class='v3-tier'>{priority}순위</div>", unsafe_allow_html=True)
         if not targets:
             st.info("현재 근거로 추천할 접촉 대상이 없습니다.")
             continue
         for col, target in zip(st.columns(min(3, len(targets))), targets):
             with col:
-                _target_card(target, language)
+                _target_card(target, language, internal=target.stakeholder_type == "INTERNAL_OSP_OWNER")
         st.write("")
+    _render_osp_matches(osp_matches)
     if result.stakeholder_unknowns:
         with st.expander(f"미확인 관계자 {len(result.stakeholder_unknowns)}명"):
             for item in result.stakeholder_unknowns:
