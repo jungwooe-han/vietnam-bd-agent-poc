@@ -52,6 +52,11 @@ from .relationship_taxonomy import (
     legacy_entity_mapping,
     normalize_relationship_type,
 )
+from .relationship_validation import (
+    assess_project_participation,
+    assess_relationship,
+    entity_identity_keys,
+)
 
 
 class WorkstreamReasoning(BaseModel):
@@ -648,6 +653,7 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
     entities: dict[str, EntityIdentity] = {}
     participations: dict[str, ProjectParticipation] = {}
     name_to_id: dict[str, str] = {}
+    identity_to_id: dict[str, str] = {}
 
     def upsert_entity(
         name: str,
@@ -664,10 +670,15 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
         source_urls: list[str] | None = None,
         source_dates: list[str] | None = None,
         temporal_scope: str = "current",
+        role_statuses: dict[str, str] | None = None,
     ) -> str:
         clean_name = name.strip()
         key = clean_name.casefold()
-        entity_id = name_to_id.get(key) or canonical_entity_id(clean_name)
+        identity_keys = entity_identity_keys(clean_name, aliases)
+        entity_id = name_to_id.get(key) or next(
+            (identity_to_id[item] for item in identity_keys if item in identity_to_id),
+            canonical_entity_id(clean_name),
+        )
         mapping = legacy_entity_mapping(legacy_type, clean_name)
         mapped_roles = list(roles or []) or list(mapping.roles)
         resolved_type = organization_type if organization_type != "UNKNOWN" else mapping.organization_type
@@ -677,6 +688,7 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
         dates = list(source_dates or [])
         entity_status = status_for(credibility, bool(labels or urls))
         role_status = "candidate" if temporal_scope in {"candidate", "historical"} else entity_status
+        resolved_role_statuses = role_statuses or {role: role_status for role in mapped_roles}
         if entity_id not in entities:
             entities[entity_id] = EntityIdentity(
                 entity_id=entity_id,
@@ -696,7 +708,7 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 project_id=project_id,
                 entity_id=entity_id,
                 roles=list(dict.fromkeys(mapped_roles)),
-                role_statuses={role: role_status for role in mapped_roles},
+                role_statuses=resolved_role_statuses,
                 temporal_scope=temporal_scope,
                 evidence_labels=labels,
                 source_urls=urls,
@@ -719,12 +731,17 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
             participation.roles = list(dict.fromkeys([*participation.roles, *mapped_roles]))[:12]
             for role in mapped_roles:
                 old = participation.role_statuses.get(role, "unknown")
-                if role_status == "confirmed" or old == "unknown" and role_status in {"likely", "candidate"}:
-                    participation.role_statuses[role] = role_status
+                new_status = resolved_role_statuses.get(role, role_status)
+                if new_status == "confirmed" or old == "unknown" and new_status in {"likely", "candidate"}:
+                    participation.role_statuses[role] = new_status
+            if participation.temporal_scope != "current" and temporal_scope == "current":
+                participation.temporal_scope = "current"
             participation.evidence_labels = list(dict.fromkeys([*participation.evidence_labels, *labels]))[:8]
             participation.source_urls = list(dict.fromkeys([*participation.source_urls, *urls]))[:8]
             participation.source_dates = list(dict.fromkeys([*participation.source_dates, *dates]))[:8]
         name_to_id[key] = entity_id
+        for identity_key in identity_keys:
+            identity_to_id[identity_key] = entity_id
         return entity_id
 
     owner_mapping = legacy_entity_mapping("owner", owner_name)
@@ -755,12 +772,19 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 else "current"
             )
             mapping = legacy_entity_mapping(discovered.entity_type, discovered.name)
+            roles = list(discovered.project_roles) or list(mapping.roles)
+            assessment = assess_project_participation(
+                discovered,
+                roles,
+                in_candidate_research=name_key in candidate_names,
+                in_historical_research=name_key in historical_names,
+            )
             upsert_entity(
                 discovered.name,
                 legacy_type=discovered.entity_type,
                 organization_type=discovered.organization_type,
                 organization_scope=discovered.organization_scope,
-                roles=list(discovered.project_roles) or list(mapping.roles),
+                roles=roles,
                 credibility=discovered.credibility,
                 aliases=discovered.aliases,
                 country=discovered.country,
@@ -768,7 +792,8 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 evidence_labels=discovered.evidence_labels,
                 source_urls=discovered.source_urls,
                 source_dates=discovered.source_dates,
-                temporal_scope=temporal_scope,
+                temporal_scope=assessment.temporal_scope,
+                role_statuses=assessment.role_statuses,
             )
 
     def entity_id_for(name: str) -> str | None:
@@ -790,9 +815,8 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 discovered.relationship_type, discovered.description
             )
             relationship_type = discovered.canonical_relationship_type or relationship_type
-            relationship_status = status_for(
-                discovered.credibility,
-                bool(discovered.evidence_labels or discovered.source_urls),
+            relationship_type, relationship_status, relationship_temporal = assess_relationship(
+                discovered, relationship_type
             )
             canonical_relationships.append(CanonicalRelationship(
                 from_entity_id=from_id,
@@ -801,7 +825,7 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 relationship_basis=discovered.relationship_basis or inferred_basis,
                 description=discovered.description or discovered.relationship_type,
                 status=relationship_status,
-                temporal_scope=discovered.temporal_scope,
+                temporal_scope=relationship_temporal,
                 evidence_labels=discovered.evidence_labels,
                 source_urls=discovered.source_urls,
                 source_dates=discovered.source_dates,
@@ -811,6 +835,26 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                 if "CO_DEVELOPMENT_PARTNER" not in target_participation.roles:
                     target_participation.roles.append("CO_DEVELOPMENT_PARTNER")
                 target_participation.role_statuses["CO_DEVELOPMENT_PARTNER"] = relationship_status
+
+    # Project Owner arbitration happens after all discoveries are validated.
+    owner_candidates = [
+        (entity_id, participation)
+        for entity_id, participation in participations.items()
+        if "PROJECT_OWNER" in participation.roles
+        and participation.temporal_scope == "current"
+        and participation.role_statuses.get("PROJECT_OWNER") in {"confirmed", "likely"}
+    ]
+    if owner_candidates:
+        owner_id, _owner_participation = min(
+            owner_candidates,
+            key=lambda item: (
+                participations[item[0]].role_statuses.get("PROJECT_OWNER") != "confirmed",
+                entities[item[0]].organization_scope != "local_entity",
+                entities[item[0]].organization_type != "PUBLIC_INSTITUTION",
+                entities[item[0]].canonical_name,
+            ),
+        )
+        intelligence.owner_summary = entities[owner_id].canonical_name
 
     decision_influences: list[DecisionInfluence] = []
     for participation in participations.values():
@@ -829,18 +873,36 @@ def build_relationship_map(bundle: ResearchBundle, intelligence: ProjectIntellig
                     evidence_labels=participation.evidence_labels,
                 ))
 
-    all_roles = {role for participation in participations.values() for role in participation.roles}
-    investor_present = "INVESTOR" in all_roles
-    epc_entities = {p.entity_id for p in participations.values() if "EPC" in p.roles}
+    all_roles = {
+        role for participation in participations.values()
+        if participation.temporal_scope == "current"
+        for role in participation.roles
+        if participation.role_statuses.get(role) in {"confirmed", "likely"}
+    }
+    investor_present = any(
+        "INVESTOR" in participation.roles
+        and participation.temporal_scope == "current"
+        and participation.role_statuses.get("INVESTOR") in {"confirmed", "likely"}
+        and entities[participation.entity_id].organization_type == "FINANCIAL_INSTITUTION"
+        for participation in participations.values()
+    )
+    epc_entities = {
+        p.entity_id for p in participations.values()
+        if "EPC" in p.roles
+        and p.temporal_scope == "current"
+        and p.role_statuses.get("EPC") in {"confirmed", "likely"}
+    }
     epc_invests = any(
         relation.from_entity_id in epc_entities
         and relation.relationship_type in {"INVESTS_IN", "OWNS"}
         and relation.temporal_scope == "current"
+        and relation.status in {"confirmed", "likely"}
         for relation in canonical_relationships
     )
     epc_contract = bool(epc_entities) and any(
         relation.relationship_type in {"EPC_CONTRACT", "AWARDS_CONTRACT_TO"}
         and relation.temporal_scope == "current"
+        and relation.status in {"confirmed", "likely"}
         for relation in canonical_relationships
     )
     if epc_invests:

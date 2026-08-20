@@ -978,6 +978,10 @@ def _round_prompt(
                     "project_roles": entity.project_roles,
                     "legacy_entity_type": entity.entity_type,
                     "credibility": entity.credibility,
+                    "project_specific": entity.project_specific,
+                    "participation_status": entity.participation_status,
+                    "participation_basis": entity.participation_basis,
+                    "role_evidence": entity.role_evidence,
                 }
                 for entity in item.discovered_entities[:10]
             ],
@@ -988,6 +992,8 @@ def _round_prompt(
                     "relationship_type": relation.canonical_relationship_type or normalize_relationship_type(relation.relationship_type, relation.description)[0],
                     "relationship_basis": relation.relationship_basis,
                     "credibility": relation.credibility,
+                    "project_specific": relation.project_specific,
+                    "role_evidence": relation.role_evidence,
                 }
                 for relation in item.discovered_relationships[:10]
             ],
@@ -1044,6 +1050,19 @@ both endpoints and the relationship type (for example, a signed MoU or awarded
 contract). A historical relationship alone must remain hypothesis and must not be
 stated as current-project participation. Include multiple sources per claim when
 available and mark contradicting sources. Do not exceed the query budget.
+
+For every discovered entity, explicitly set project_specific,
+participation_status, participation_basis, and role_evidence. A search mention,
+event attendance, executive meeting, general authorized-distributor status,
+historical partnership, or intended-user reference is not current-project
+participation. Mark those candidate or reference_only. For each role, role_evidence
+must state the project-specific sentence supporting that exact role.
+
+Guardrails: meeting is not investment; distributor status is not a project
+vendor; M&E/fit-out is not full EPC; intended user is not confirmed End Client;
+technology partner is not Project Owner; industrial-park location is not Project
+Owner. For every discovered relationship set project_specific and role_evidence.
+Only a source directly linking both endpoints and the relationship may be current.
 """
 
 

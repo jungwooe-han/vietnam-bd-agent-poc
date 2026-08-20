@@ -1,4 +1,10 @@
-from src.vietnam_bd.history import get_analysis, list_analyses, save_analysis
+from src.vietnam_bd.history import (
+    export_analyses,
+    get_analysis,
+    import_analyses,
+    list_analyses,
+    save_analysis,
+)
 
 
 def test_analysis_history_round_trip(tmp_path, monkeypatch):
@@ -22,3 +28,21 @@ def test_history_is_newest_first(tmp_path, monkeypatch):
     first_id = save_analysis(seed="first", result_version="legacy", result={})
     second_id = save_analysis(seed="second", result_version="v2", result={})
     assert [item.history_id for item in list_analyses()] == [second_id, first_id]
+
+
+def test_history_export_import_is_idempotent(tmp_path, monkeypatch):
+    source_path = tmp_path / "source.sqlite3"
+    target_path = tmp_path / "target.sqlite3"
+    monkeypatch.setenv("BD_HISTORY_DB_PATH", str(source_path))
+    history_id = save_analysis(
+        seed="Thermo Fisher NIC",
+        result_version="v3",
+        result={"opportunity_title": "Shared Lab"},
+        research_trace={"sources": 8},
+    )
+    records = export_analyses()
+
+    monkeypatch.setenv("BD_HISTORY_DB_PATH", str(target_path))
+    assert import_analyses(records) == 1
+    assert import_analyses(records) == 0
+    assert get_analysis(history_id).result["opportunity_title"] == "Shared Lab"

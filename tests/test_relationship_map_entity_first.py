@@ -391,6 +391,114 @@ class EntityFirstRelationshipMapTest(unittest.TestCase):
         }
         self.assertTrue({"org:fpt", "org:distributor", "org:official"}.issubset(candidate_ids))
 
+    def test_upstream_gate_separates_current_participants_from_research_leads(self) -> None:
+        bundle = ResearchBundle(
+            quick=QuickResearchResult(company="Thermo Fisher Scientific", project_name="Shared lab"),
+            research_mode="deep",
+            stage_gate_status="targeting",
+            stage_gate_reason="MOU",
+            seed_understanding=SeedUnderstanding(
+                company="Thermo Fisher Scientific",
+                owner_candidate="Vietnam National Innovation Center (NIC)",
+            ),
+            research_rounds=[ResearchRoundResult(
+                round_number=1,
+                focus="Current participants",
+                findings=DeepResearchResult(),
+                discovered_entities=[
+                    DiscoveredEntity(
+                        name="Vietnam National Innovation Center (NIC)",
+                        entity_type="owner",
+                        project_roles=["PROJECT_OWNER", "HOST"],
+                        credibility="confirmed",
+                        project_specific=True,
+                        participation_status="current_participant",
+                        participation_basis="Official MOU signatory and project host",
+                        role_evidence="NIC signed the project MOU as host.",
+                        evidence_labels=["Official MOU"],
+                        source_urls=[SOURCE_URL],
+                    ),
+                    DiscoveredEntity(
+                        name="Thermo Fisher Scientific",
+                        entity_type="technology_partner",
+                        project_roles=["CO_DEVELOPMENT_PARTNER", "TECHNOLOGY_PROVIDER"],
+                        credibility="confirmed",
+                        project_specific=True,
+                        participation_status="current_participant",
+                        participation_basis="Official MOU signatory",
+                        role_evidence="Thermo Fisher signed the project MOU as technology partner.",
+                        evidence_labels=["Official MOU"],
+                        source_urls=[SOURCE_URL],
+                    ),
+                    DiscoveredEntity(
+                        name="FPT Corporation",
+                        entity_type="end_client",
+                        project_roles=["END_CLIENT", "STRATEGIC_PARTNER"],
+                        credibility="confirmed",
+                        project_specific=False,
+                        participation_status="candidate",
+                        participation_basis="Intended user mentioned at forum",
+                        role_evidence="Named as an intended user, not a contracted participant.",
+                        evidence_labels=["Forum coverage"],
+                        source_urls=[SOURCE_URL],
+                    ),
+                    DiscoveredEntity(
+                        name="Vietnam Lab Distributor",
+                        entity_type="vendor",
+                        project_roles=["VENDOR", "EQUIPMENT_SUPPLIER"],
+                        credibility="confirmed",
+                        project_specific=False,
+                        participation_status="reference_only",
+                        participation_basis="General authorized distributor channel",
+                        role_evidence="Distributor listing is not tied to this project.",
+                        evidence_labels=["Distributor page"],
+                        source_urls=[SOURCE_URL],
+                    ),
+                ],
+                discovered_relationships=[
+                    DiscoveredRelationship(
+                        from_entity="Vietnam National Innovation Center (NIC)",
+                        to_entity="Thermo Fisher Scientific",
+                        relationship_type="MOU",
+                        canonical_relationship_type="MOU",
+                        credibility="confirmed",
+                        project_specific=True,
+                        role_evidence="Both parties signed the project MOU.",
+                        evidence_labels=["Official MOU"],
+                        source_urls=[SOURCE_URL],
+                    ),
+                    DiscoveredRelationship(
+                        from_entity="Thermo Fisher Scientific",
+                        to_entity="FPT Corporation",
+                        relationship_type="strategic partnership",
+                        canonical_relationship_type="STRATEGIC_PARTNERSHIP",
+                        credibility="confirmed",
+                        project_specific=False,
+                        role_evidence="Only an intended-user reference.",
+                        evidence_labels=["Forum coverage"],
+                        source_urls=[SOURCE_URL],
+                    ),
+                ],
+            )],
+        )
+        intelligence = ProjectIntelligence()
+
+        relmap = build_relationship_map(bundle, intelligence)
+        participation_by_name = {
+            entity.canonical_name: next(item for item in relmap.participations if item.entity_id == entity.entity_id)
+            for entity in relmap.entities
+        }
+
+        self.assertEqual(participation_by_name["Vietnam National Innovation Center (NIC)"].temporal_scope, "current")
+        self.assertEqual(participation_by_name["Thermo Fisher Scientific"].temporal_scope, "current")
+        self.assertEqual(participation_by_name["FPT Corporation"].temporal_scope, "candidate")
+        self.assertEqual(participation_by_name["Vietnam Lab Distributor"].temporal_scope, "candidate")
+        self.assertEqual(intelligence.owner_summary, "Vietnam National Innovation Center (NIC)")
+        self.assertEqual(
+            [(item.relationship_type, item.status, item.temporal_scope) for item in relmap.canonical_relationships],
+            [("MOU", "confirmed", "current"), ("STRATEGIC_PARTNERSHIP", "candidate", "candidate")],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

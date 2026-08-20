@@ -4,14 +4,15 @@ import json
 import os
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 
 DEFAULT_HISTORY_PATH = Path(__file__).resolve().parents[2] / "data" / "bd_history.sqlite3"
+DATABASE_URL_KEYS = ("BD_HISTORY_DATABASE_URL", "DATABASE_URL")
 
 
 @dataclass(frozen=True)
@@ -41,13 +42,48 @@ def _database_path() -> Path:
     return Path(configured).expanduser() if configured else DEFAULT_HISTORY_PATH
 
 
-def _connect() -> sqlite3.Connection:
-    path = _database_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=30)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA busy_timeout = 30000")
-    connection.execute(
+def _database_url() -> str:
+    for key in DATABASE_URL_KEYS:
+        if value := os.getenv(key, "").strip():
+            return value
+
+    # Streamlit Community Cloud exposes secrets through st.secrets rather than
+    # ordinary environment variables. Keep this module usable without Streamlit.
+    try:
+        import streamlit as st
+
+        for key in DATABASE_URL_KEYS:
+            value = str(st.secrets.get(key, "")).strip()
+            if value:
+                return value
+    except Exception:
+        pass
+    return ""
+
+
+class _Connection:
+    def __init__(self, raw: Any, *, backend: str) -> None:
+        self.raw = raw
+        self.backend = backend
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> Any:
+        if self.backend == "postgresql":
+            sql = sql.replace("?", "%s")
+        return self.raw.execute(sql, params)
+
+    def commit(self) -> None:
+        self.raw.commit()
+
+    def rollback(self) -> None:
+        self.raw.rollback()
+
+    def close(self) -> None:
+        self.raw.close()
+
+
+def _initialize_sqlite(raw: sqlite3.Connection) -> None:
+    raw.execute("PRAGMA busy_timeout = 30000")
+    raw.execute(
         """
         CREATE TABLE IF NOT EXISTS bd_analysis_history (
             history_id TEXT PRIMARY KEY,
@@ -69,29 +105,84 @@ def _connect() -> sqlite3.Connection:
         "error_message": "TEXT NOT NULL DEFAULT ''",
         "updated_at": "TEXT NOT NULL DEFAULT ''",
     }
-    columns = {
-        row["name"] for row in connection.execute("PRAGMA table_info(bd_analysis_history)")
-    }
+    columns = {row["name"] for row in raw.execute("PRAGMA table_info(bd_analysis_history)")}
     for name, declaration in migrations.items():
         if name not in columns:
-            connection.execute(
-                f"ALTER TABLE bd_analysis_history ADD COLUMN {name} {declaration}"
-            )
-    return connection
+            raw.execute(f"ALTER TABLE bd_analysis_history ADD COLUMN {name} {declaration}")
+
+
+def _initialize_postgresql(raw: Any) -> None:
+    raw.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bd_analysis_history (
+            history_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            seed TEXT NOT NULL,
+            seed_preview TEXT NOT NULL,
+            result_version TEXT NOT NULL,
+            result_json TEXT NOT NULL DEFAULT '{}',
+            research_trace_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'completed',
+            engine TEXT NOT NULL DEFAULT '',
+            research_provider TEXT NOT NULL DEFAULT 'existing',
+            guided_context TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    migrations = {
+        "status": "TEXT NOT NULL DEFAULT 'completed'",
+        "engine": "TEXT NOT NULL DEFAULT ''",
+        "research_provider": "TEXT NOT NULL DEFAULT 'existing'",
+        "guided_context": "TEXT NOT NULL DEFAULT ''",
+        "error_message": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    }
+    for name, declaration in migrations.items():
+        raw.execute(
+            f"ALTER TABLE bd_analysis_history ADD COLUMN IF NOT EXISTS {name} {declaration}"
+        )
+
+
+def _connect() -> _Connection:
+    database_url = _database_url()
+    if database_url:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError(
+                "Shared BD history requires psycopg. Install project requirements first."
+            ) from exc
+        raw = psycopg.connect(database_url, row_factory=dict_row, connect_timeout=15)
+        _initialize_postgresql(raw)
+        return _Connection(raw, backend="postgresql")
+
+    path = _database_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = sqlite3.connect(path, timeout=30)
+    raw.row_factory = sqlite3.Row
+    _initialize_sqlite(raw)
+    return _Connection(raw, backend="sqlite")
 
 
 @contextmanager
 def _connection():
     connection = _connect()
     try:
-        with connection:
-            yield connection
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 
 
 def _now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
 
 
 def start_analysis(
@@ -208,19 +299,14 @@ def list_analyses(limit: int = 200) -> list[HistorySummary]:
         rows = connection.execute(
             """SELECT history_id, title, seed_preview, result_version, created_at,
                       status, engine, research_provider, updated_at
-            FROM bd_analysis_history ORDER BY created_at DESC, rowid DESC LIMIT ?""",
+            FROM bd_analysis_history
+            ORDER BY created_at DESC, updated_at DESC, history_id DESC LIMIT ?""",
             (safe_limit,),
         ).fetchall()
     return [HistorySummary(**dict(row)) for row in rows]
 
 
-def get_analysis(history_id: str) -> HistoryRecord | None:
-    with _connection() as connection:
-        row = connection.execute(
-            "SELECT * FROM bd_analysis_history WHERE history_id = ?", (history_id,)
-        ).fetchone()
-    if row is None:
-        return None
+def _record_from_row(row: Mapping[str, Any]) -> HistoryRecord:
     return HistoryRecord(
         history_id=row["history_id"],
         title=row["title"],
@@ -237,3 +323,69 @@ def get_analysis(history_id: str) -> HistoryRecord | None:
         guided_context=row["guided_context"],
         error_message=row["error_message"],
     )
+
+
+def get_analysis(history_id: str) -> HistoryRecord | None:
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM bd_analysis_history WHERE history_id = ?", (history_id,)
+        ).fetchone()
+    return _record_from_row(row) if row is not None else None
+
+
+def export_analyses(limit: int = 1000) -> list[dict[str, Any]]:
+    """Return complete history records for an explicit backup or migration."""
+
+    safe_limit = max(1, min(limit, 10000))
+    with _connection() as connection:
+        rows = connection.execute(
+            """SELECT * FROM bd_analysis_history
+            ORDER BY created_at ASC, updated_at ASC, history_id ASC LIMIT ?""",
+            (safe_limit,),
+        ).fetchall()
+    return [asdict(_record_from_row(row)) for row in rows]
+
+
+def import_analyses(records: Iterable[Mapping[str, Any]]) -> int:
+    """Idempotently copy exported analyses into the configured history store."""
+
+    imported = 0
+    with _connection() as connection:
+        for record in records:
+            params = (
+                str(record["history_id"]),
+                str(record.get("title") or "Untitled BD analysis"),
+                str(record.get("seed") or ""),
+                str(record.get("seed_preview") or ""),
+                str(record.get("result_version") or "pending"),
+                json.dumps(record.get("result") or {}, ensure_ascii=False),
+                json.dumps(record.get("research_trace") or {}, ensure_ascii=False),
+                str(record.get("created_at") or _now()),
+                str(record.get("status") or "completed"),
+                str(record.get("engine") or ""),
+                str(record.get("research_provider") or "existing"),
+                str(record.get("guided_context") or ""),
+                str(record.get("error_message") or ""),
+                str(record.get("updated_at") or record.get("created_at") or _now()),
+            )
+            if connection.backend == "postgresql":
+                cursor = connection.execute(
+                    """INSERT INTO bd_analysis_history
+                    (history_id, title, seed, seed_preview, result_version, result_json,
+                     research_trace_json, created_at, status, engine, research_provider,
+                     guided_context, error_message, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (history_id) DO NOTHING""",
+                    params,
+                )
+            else:
+                cursor = connection.execute(
+                    """INSERT OR IGNORE INTO bd_analysis_history
+                    (history_id, title, seed, seed_preview, result_version, result_json,
+                     research_trace_json, created_at, status, engine, research_provider,
+                     guided_context, error_message, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    params,
+                )
+            imported += max(cursor.rowcount, 0)
+    return imported

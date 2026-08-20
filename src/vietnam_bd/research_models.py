@@ -125,6 +125,12 @@ class DiscoveredEntity(BaseModel):
     evidence_labels: list[str] = Field(default_factory=list)
     source_urls: list[str] = Field(default_factory=list, max_length=8)
     source_dates: list[str] = Field(default_factory=list, max_length=8)
+    project_specific: bool | None = None
+    participation_status: Literal[
+        "current_participant", "candidate", "reference_only", "unknown"
+    ] = "unknown"
+    participation_basis: str = ""
+    role_evidence: str = ""
 
 
 class DiscoveredRelationship(BaseModel):
@@ -146,6 +152,8 @@ class DiscoveredRelationship(BaseModel):
     evidence_labels: list[str] = Field(default_factory=list, max_length=8)
     source_urls: list[str] = Field(default_factory=list, max_length=8)
     source_dates: list[str] = Field(default_factory=list, max_length=8)
+    project_specific: bool | None = None
+    role_evidence: str = ""
 
 
 class ResearchGap(BaseModel):

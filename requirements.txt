@@ -5,3 +5,4 @@ openai>=1.40,<2
 pydantic>=2.12,<3
 beautifulsoup4>=4.12,<5
 pypdf>=4.3,<7
+psycopg[binary]>=3.2,<4
